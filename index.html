@@ -36,16 +36,20 @@ input{width:100%;padding:14px;border-radius:16px;border:2px solid #ffffff22;back
 .card.mine:disabled{opacity:1}
 #fight{padding:0;gap:0;justify-content:flex-start}
 canvas{width:720px;height:360px;display:block}
-#controls{position:absolute;left:0;right:0;bottom:0;height:84px;padding:0 14px 12px;display:none;justify-content:space-between;align-items:stretch}
-#controls .g{display:flex;gap:8px}
+#controls{position:absolute;inset:0;display:none;pointer-events:none}
+#cbar{position:absolute;left:0;right:0;bottom:0;height:98px;padding:0 14px 12px;display:flex;justify-content:space-between;align-items:stretch}
+#controls .g{display:flex;gap:8px;pointer-events:none}
+#controls .cb{pointer-events:auto}
 .cb{border:0;border-radius:16px;background:var(--panel);color:var(--ink);font-family:'Lilita One',system-ui;font-size:17px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:inset 0 0 0 2px #ffffff22}
 .cb small{font-family:system-ui;font-size:10px;color:var(--dim)}
-#bb,#bf{width:66px;font-size:26px}
-.ud{display:flex;flex-direction:column;gap:6px;width:72px}
-.ud .cb{flex:1;font-size:20px}
+#bb,#bf{width:72px;font-size:30px}
+.ud{display:flex;flex-direction:column;gap:8px;width:108px}
+.ud .cb{flex:1;font-size:36px}
 #bp{width:98px;background:var(--c);color:#1b1730;font-size:20px}
 #bp small{color:#1b1730aa}
 #bs{width:82px}
+#bgb{position:absolute;right:14px;top:62px;width:96px;height:66px;font-size:22px;background:#ffd166;color:#1b1730}
+#bgb small{color:#1b1730aa}
 #bu{width:82px;background:linear-gradient(to top,#ffd16688 var(--p,0%),var(--panel) var(--p,0%))}
 .cb.ready{box-shadow:inset 0 0 0 3px var(--c)}
 @keyframes ublink{
@@ -97,6 +101,8 @@ canvas{width:720px;height:360px;display:block}
     <canvas id="cv" width="720" height="360"></canvas>
     <div id="cdnum"></div>
     <div id="controls">
+      <button class="cb" id="bgb">Grab<small>again: throw</small></button>
+      <div id="cbar">
       <div class="g">
         <button class="cb" id="bb">◀</button>
         <div class="ud">
@@ -108,7 +114,8 @@ canvas{width:720px;height:360px;display:block}
       <div class="g">
         <button class="cb" id="bp">Punch<small>tap again: kick</small></button>
         <button class="cb" id="bs">Special</button>
-        <button class="cb" id="bu">Ultimate</button>
+        <button class="cb" id="bu">Ultimate<small>every 7s</small></button>
+      </div>
       </div>
     </div>
     <div id="over">
@@ -144,6 +151,9 @@ const SP = [ /* special moves, one per element */
 const PRE = 'eduel1-';
 /* The floor is a band: feet can stand anywhere from y=ZF (far away) to y=GYN (close to the viewer). z = 0..ZD */
 const ZF = 216, ZD = 52, GYN = ZF + ZD;
+/* The arena is 2x wider than the screen; the camera follows the fighters. A cut line marks the middle. */
+const WW = 1440, MAXGAP = 600, START = [WW/2 - 210, WW/2 + 210];
+const mkD = () => ({f:START.map(x => ({x, y:0, z:ZD/2, hp:100, lx:x, lz:ZD/2})), e:{}, p:{}});
 const ps = z => 1.10 + .16 * (Math.max(0, Math.min(ZD, z)) / ZD);   /* fighters look bigger when closer */
 
 function fit(){
@@ -157,13 +167,14 @@ addEventListener('resize', fit); fit();
 let peer, conn, isHost = false, me = 0, phase = 'lobby';
 let picks = [null,null], fighters = [null,null], pend = false;
 let G = null, tickId = null, lastT = 0;
-const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, u:false, s:false, r:false, sh:false});
-let V = {f:[blankF(150, 1), blankF(570, -1)], e:[]};
-let D = {f:[{x:150,y:0,z:ZD/2,hp:100,lx:150,lz:ZD/2},{x:570,y:0,z:ZD/2,hp:100,lx:570,lz:ZD/2}], e:{}};
+const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, u:false, s:false, r:false, sh:false, hd:0});
+let V = {f:[blankF(START[0], 1), blankF(START[1], -1)], e:[], p:[]};
+let D = mkD();
 let parts = [], texts = [], shake = 0, banner = null, tiltT = [0,0];
 let score = [0,0], round = 1, bgT = 0;      /* bgT = seconds of fighting so far; picks the scene */
 const WINS = 2;                          /* rounds needed to win the duel */
-const X = x => me === 0 ? x : 720 - x;   /* each phone shows itself on the left */
+let cam = 0;
+const X = x => (me === 0 ? x : WW - x) - cam;   /* each phone shows itself on the left; cam scrolls the wide arena */
 
 function show(id){ document.querySelectorAll('.screen').forEach(e => e.classList.toggle('on', e.id === id)); }
 function err(msg){ $('err').textContent = msg; $('create').disabled = false; $('joinbtn').disabled = false; show('lobby'); phase = 'lobby'; }
@@ -273,10 +284,10 @@ function startCountdown(){
 }
 function enterFight(){
   fighters = picks.slice();
-  V = {f:[blankF(150, 1), blankF(570, -1)], e:[]};
-  D = {f:[{x:150,y:0,z:ZD/2,hp:100,lx:150,lz:ZD/2},{x:570,y:0,z:ZD/2,hp:100,lx:570,lz:ZD/2}], e:{}};
+  V = {f:[blankF(START[0], 1), blankF(START[1], -1)], e:[], p:[]};
+  D = mkD();
   parts = []; texts = []; banner = null; held.b = held.f = held.u = held.d = false; lastMv = 0; lastMz = 0; bgCur = -1;
-  $('stage').style.setProperty('--c', F[fighters[me]].c);
+  $('stage').style.setProperty('--c', F[fighters[me]].c); cam = (WW - 720)/2;
   $('over').classList.remove('on'); $('controls').style.display = 'none';
   show('fight');
 }
@@ -301,12 +312,12 @@ const MAXHITS = 3;                      /* punches + kicks allowed per second */
 const DMGX = .5;                        /* every attack's damage is multiplied by this (lower = longer fights) */
 
 /* x = left/right, z = depth (0 far .. ZD close), y = height (only from being knocked up), fd = facing (+1 world-right / -1 world-left) */
-function mk(i){ return {x:i?570:150, y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0, fd:dir(i), hits:[], taken:[], need:4 + Math.floor(Math.random()*3), a:0, aUntil:0, stun:0, root:0,
-                        ch:0, ult:false, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0}; }
+function mk(i){ return {x:START[i], y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0, fd:dir(i), hits:[], taken:[], need:4 + Math.floor(Math.random()*3), a:0, aUntil:0, stun:0, root:0,
+                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0}; }
 function beginFight(){
   const now = performance.now();
-  G = {f:[mk(0), mk(1)], e:[], pend:[], eid:0, over:false};
-  G.f.forEach(f => f.spAt = now + 4000 + Math.random()*2000);
+  G = {f:[mk(0), mk(1)], e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps();
+  G.f.forEach(f => { f.spAt = now + 4000 + Math.random()*2000; f.ultAt = now + 7000; });
   [0,1].forEach(i => { if (fighters[i] === 2) spawnPandas(i); });
   lastT = now; clearInterval(tickId); tickId = setInterval(loop, 33);
 }
@@ -316,7 +327,7 @@ const PANDA_SLOTS = [-120, -62, 66, 124], PANDA_ZO = [-16, 14, 12, -14];
 function spawnPandas(i){
   const f = G.f[i];
   PANDA_SLOTS.forEach((off, n) => G.e.push({id:++G.eid, k:'panda', o:i, n, off, zo:PANDA_ZO[n],
-    x:clamp(f.x + off, 40, 680), y:0, z:clamp(f.z + PANDA_ZO[n], 0, ZD), age:0, mode:'idle', tx:f.x + off, wt:0,
+    x:clamp(f.x + off, 40, WW-40), y:0, z:clamp(f.z + PANDA_ZO[n], 0, ZD), age:0, mode:'idle', tx:f.x + off, wt:0,
     fd:f.fd, walk:false, done:false, doneAt:0}));
 }
 function pandaRush(i, now){
@@ -346,7 +357,7 @@ function pandaTick(p, dt, now){
     if (Math.abs(goal - p.x) < 6){ p.mode = 'idle'; p.tx = goal; p.wt = now + 900; goal = null; }
   } else if (p.mode === 'idle'){
     if (now >= p.wt){
-      p.tx = clamp(f.x + (Math.random()*300 - 150), 34, 686);
+      p.tx = clamp(f.x + (Math.random()*300 - 150), 34, WW-34);
       p.wt = now + 1400 + Math.random()*2400;
     }
     goal = p.tx; sp = 44;
@@ -359,13 +370,13 @@ function pandaTick(p, dt, now){
   const dz = gz - p.z;
   if (Math.abs(dz) > .5){ p.z = clamp(p.z + clamp(dz, -zs*dt, zs*dt), 0, ZD); walking = true; }
   p.walk = walking;
-  p.x = clamp(p.x, 30, 690);
+  p.x = clamp(p.x, 30, WW-30);
 }
 /* ---------- water fighter's ultimate: flood + unicorn + 4s electrocution ---------- */
 function waterUlt(i, now){
   const f = G.f[i], d = f.fd, en = G.f[1 - i];
   G.e.push({id:++G.eid, k:'flood', o:i, x:360, y:0, z:0, age:0});
-  const uni = {id:++G.eid, k:'uni', o:i, x:clamp(f.x - d*100, 70, 650), y:0, z:f.z, age:0, fd:d};
+  const uni = {id:++G.eid, k:'uni', o:i, x:clamp(f.x - d*100, 70, WW-70), y:0, z:f.z, age:0, fd:d};
   later(now + 500, () => G.e.push(uni));
   later(now + 1300, () => {
     if (!G.e.includes(uni) || en.hp <= 0) return;
@@ -383,6 +394,7 @@ function ev(m){ m.t = 'ev'; send(m); handleEv(m); }
 function damage(t, dmg, kb, stunMs, big, raise, dx){
   const now = performance.now(), f = G.f[t], a = G.f[1-t];
   dmg *= DMGX;
+  if ((kb > 0 || stunMs > 0) && f.hold) dropHold(t);   /* a real hit makes you drop what you hold */
   const away = dx || Math.sign(f.x - a.x) || a.fd;
   let tilt = false, thrown = false;
   if (kb > 0){                                            /* real blows only (not burn / shock ticks) */
@@ -397,7 +409,6 @@ function damage(t, dmg, kb, stunMs, big, raise, dx){
   f.kx += away * (thrown ? 1500 : kb);
   if (stunMs > 0){ f.stun = Math.max(f.stun, now + stunMs); f.a = 0; }
   if (raise){ f.vy = raise; }
-  f.ch = Math.min(100, f.ch + 6*DMGX); a.ch = Math.min(100, a.ch + 8*DMGX);
   ev({k:'hit', i:t, d:Math.max(1, Math.round(dmg)), big:!!big, x:r1(f.x), y:r1(f.y), z:r1(f.z), tl:tilt, th:thrown});
 }
 
@@ -417,16 +428,26 @@ function loop(){
     f.x += (vx + f.kx) * dt; f.kx *= Math.pow(.02, dt);
     if (free && f.mz) f.z = clamp(f.z + f.mz * 95 * dt, 0, ZD);
     if (f.y > 0 || f.vy > 0){ f.vy -= 1700*dt; f.y += f.vy*dt; if (f.y <= 0){ f.y = 0; f.vy = 0; } }
-    if (!f.ult) f.ch = Math.min(100, f.ch + 2.5*dt);
+    f.ch = clamp(100 - (f.ultAt - now)/70, 0, 100);   /* ultimate is ready again every 7 seconds */
   }
   /* keep fighters on the arena; they only bump when they share a lane, so you can walk around each other */
   const [a,b] = G.f;
-  a.x = clamp(a.x, 34, 686); b.x = clamp(b.x, 34, 686);
-  const gap = b.x - a.x;
-  if (Math.abs(gap) < 44 && Math.abs(a.z - b.z) < 16){
-    const push = (44 - Math.abs(gap))/2, sg = gap >= 0 ? 1 : -1;
-    a.x = clamp(a.x - sg*push, 34, 686); b.x = clamp(b.x + sg*push, 34, 686);
+  a.x = clamp(a.x, 34, WW-34); b.x = clamp(b.x, 34, WW-34);
+  { /* fighters can retreat far, but never further apart than the screen can show */
+    const gp = b.x - a.x;
+    if (Math.abs(gp) > MAXGAP){
+      const ex = Math.abs(gp) - MAXGAP, sg = gp >= 0 ? 1 : -1;
+      const kA = (now < a.stun || Math.abs(a.kx) > 60) ? 1 : 0, kB = (now < b.stun || Math.abs(b.kx) > 60) ? 1 : 0;
+      const wa = (kA + kB === 1) ? kA : .5, wb = (kA + kB === 1) ? kB : .5;
+      a.x = clamp(a.x + sg*ex*wa, 34, WW-34); b.x = clamp(b.x - sg*ex*wb, 34, WW-34);
+    }
   }
+  const gap = b.x - a.x;
+  if (!a.hold && !b.hold && Math.abs(gap) < 44 && Math.abs(a.z - b.z) < 16){
+    const push = (44 - Math.abs(gap))/2, sg = gap >= 0 ? 1 : -1;
+    a.x = clamp(a.x - sg*push, 34, WW-34); b.x = clamp(b.x + sg*push, 34, WW-34);
+  }
+  holdTick(now); updProps(dt);
 
   for (const e of G.e.slice()){
     e.age += dt*1000;
@@ -439,7 +460,7 @@ function loop(){
     if (!e.vx) continue;
     e.x += e.vx*dt;
     if (e.hz){ const tg = G.f[1 - e.o]; e.z = clamp(e.z + clamp(tg.z - e.z, -e.hz*dt, e.hz*dt), 0, ZD); }
-    if (e.x < -80 || e.x > 800){ rm(e); continue; }
+    if (e.x < -80 || e.x > WW + 80){ rm(e); continue; }
     const t = 1 - e.o, f = G.f[t];
     if (!e.hit && f.hp > 0 && Math.abs(e.x - f.x) < e.r + 26 && Math.abs(e.y - (f.y + 62)) < e.r + 64 && Math.abs(e.z - f.z) < 14 + e.r*.6){
       if (e.pierce) e.hit = true; else rm(e);
@@ -466,9 +487,10 @@ function loop(){
 function snapshot(){
   const now = performance.now();
   V = {t:'s', bg:Math.floor(bgT / BG_SECONDS) % 3,
-    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:now >= f.spAt, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock})),
+    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:now >= f.spAt, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, hd:f.hold ? 1 : 0})),
     e: G.e.map(e => ({id:e.id, k:e.k, o:e.o, x:r1(e.x), y:r1(e.y), z:r1(e.z || 0), r:e.r||0, a:Math.round(e.age),
-                      w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)}))};
+                      w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)})),
+    p: G.p.map(p => ({id:p.id, k:p.k, x:r1(p.x), y:r1(p.y), z:r1(p.z), h:p.h, fl:p.fl ? 1 : 0, fd:p.fd}))};
   return V;
 }
 
@@ -482,7 +504,7 @@ function clearTrees(o){ G.e = G.e.filter(x => !(x.k === 'tree' && x.o === o)); G
 
 function doMelee(i){
   const now = performance.now(), f = G.f[i];
-  if (now < f.stun || now < f.cdUntil) return;
+  if (now < f.stun || now < f.cdUntil || f.hold) return;
   f.hits = f.hits.filter(t => now - t < 1000);
   if (f.hits.length >= MAXHITS) return;                 /* max 3 punches/kicks in any 1 second */
   f.hits.push(now);
@@ -499,7 +521,7 @@ function doMelee(i){
 }
 function doSpecial(i){
   const now = performance.now(), f = G.f[i];
-  if (now < f.stun || now < f.spAt) return;
+  if (now < f.stun || now < f.spAt || f.hold) return;
   f.spAt = now + 4000 + Math.random()*2000;
   f.a = 3; f.aUntil = now + 350;
   const d = f.fd;
@@ -507,8 +529,8 @@ function doSpecial(i){
 }
 function doUlt(i){
   const now = performance.now(), f = G.f[i], d = f.fd, o = G.f[1-i];
-  if (now < f.stun || f.ult || f.ch < 100) return;
-  f.ult = true; f.ch = 0; f.a = 4; f.aUntil = now + 700;
+  if (now < f.stun || now < f.ultAt || f.hold) return;
+  f.ultAt = now + 7000; f.ch = 0; f.a = 4; f.aUntil = now + 700;
   ev({k:'ult', i});
   const el = fighters[i];
   if (el === 0){        /* water: flood the arena, unicorn electrocutes the enemy */
@@ -516,7 +538,7 @@ function doUlt(i){
   } else if (el === 2){ /* wind: the 4 pandas rush the enemy */
     pandaRush(i, now);
   } else if (el === 1){ /* fire: tank */
-    const tk = {id:++G.eid, k:'tank', o:i, x:clamp(f.x - d*90, 40, 680), y:0, z:f.z, fd:d, age:0};
+    const tk = {id:++G.eid, k:'tank', o:i, x:clamp(f.x - d*90, 40, WW-40), y:0, z:f.z, fd:d, age:0};
     G.e.push(tk);
     const shell = big => { if (!G.e.includes(tk)) return;
       const e = proj(i, {k:'fb', v:big?460:420, y:50, r:big?30:14, dmg:big?20:7, kb:big?720:150, st:big?700:250, big}, d);
@@ -533,6 +555,82 @@ function doUlt(i){
     later(now + 3000, () => clearTrees(i));
   }
 }
+
+/* ---------- things lying on the floor, plus grab & throw ---------- */
+const PR  = {chair:{v:480, dmg:16, kb:300, st:450}, bear:{v:540, dmg:8, kb:600, st:350},
+             tv:{v:430, dmg:22, kb:340, st:650},    fridge:{v:330, dmg:36, kb:500, st:900, big:true}};
+const PHT = {chair:76, bear:108, tv:78, fridge:124}, PWD = {chair:24, bear:36, tv:32, fridge:30};
+function mkProps(){
+  return [['chair',420,36], ['bear',640,10], ['tv',800,10], ['fridge',1020,36]].map(([k, x, z]) =>
+    ({id:++G.eid, k, x, y:0, z, vx:0, vy:0, h:-1, fl:false, o:0, hit:false, fd:1}));
+}
+const tx = (f, s, c) => ev({k:'tx', s, c, x:r1(f.x), y:r1(f.y), z:r1(f.z)});
+function dropHold(i){
+  const f = G.f[i], h = f.hold; if (!h) return;
+  f.hold = null; f.grabAt = performance.now() + 500;
+  if (h.p){ h.p.h = -1; h.p.vx = 0; h.p.vy = 0; h.p.fl = false; }
+  else { const o = G.f[1-i]; o.stun = Math.max(o.stun, performance.now() + 250); }
+}
+function throwHold(i){
+  const now = performance.now(), f = G.f[i], d = f.fd, h = f.hold;
+  f.hold = null; f.grabAt = now + 500; f.a = 1; f.aUntil = now + 260;
+  if (h.p){
+    const p = h.p, c = PR[p.k];
+    p.h = -1; p.o = i; p.hit = false; p.fl = true; p.fd = d;
+    p.x = f.x + d*30; p.z = clamp(f.z, 0, ZD); p.y = f.y + 84; p.vx = d*c.v; p.vy = 120;
+  } else {
+    damage(1-i, 24, 760, 1000, true, 400, d);
+    tx(f, 'Thrown!', '#ffd166');
+  }
+}
+function doGrab(i){
+  const now = performance.now(), f = G.f[i], o = G.f[1-i], d = f.fd;
+  if (f.hold){ throwHold(i); return; }                       /* press again: throw */
+  if (now < f.stun || now < f.grabAt) return;
+  f.grabAt = now + 450; f.a = 3; f.aUntil = now + 250;
+  const fr = (o.x - f.x)*d;
+  const nearP = o.hp > 0 && fr > -12 && fr < 84 && Math.abs(o.z - f.z) < 18 && Math.abs(o.y - f.y) < 55;
+  let best = null, bd = 1e9;
+  for (const p of G.p){
+    if (p.h >= 0 || p.fl || p.y > 8) continue;
+    const pf = (p.x - f.x)*d, dz = Math.abs(p.z - f.z);
+    if (pf > -34 && pf < 80 && dz < 22){ const dd = Math.abs(pf - 24) + dz; if (dd < bd){ bd = dd; best = p; } }
+  }
+  const pd = nearP ? Math.abs(fr - 24) + Math.abs(o.z - f.z) : 1e9;
+  if (best && bd <= pd){ best.h = i; best.o = i; best.vx = 0; best.vy = 0; f.hold = {p:best}; tx(f, 'Got it!', '#ffd166'); return; }
+  if (nearP){
+    if (Math.random() < .3){ f.hold = {p:null, until:now + 3500}; tx(f, 'Grabbed!', '#ffd166'); }   /* 30% to grab a player */
+    else { f.grabAt = now + 900; tx(f, 'Missed!', '#ff8a8a'); }
+  }
+}
+function holdTick(now){
+  for (let i = 0; i < 2; i++){
+    const f = G.f[i], h = f.hold; if (!h) continue;
+    f.a = 4; f.aUntil = now + 120;                           /* arms up while carrying */
+    if (h.p) continue;
+    const o = G.f[1-i];
+    if (now > h.until || o.hp <= 0){ dropHold(i); continue; }
+    o.x = f.x + f.fd*10; o.z = Math.min(ZD, f.z + .3); o.y = f.y + 92;
+    o.vy = 0; o.kx = 0; o.stun = Math.max(o.stun, now + 150); o.a = 0;
+  }
+}
+function updProps(dt){
+  for (const p of G.p){
+    if (p.h >= 0){ const f = G.f[p.h]; p.x = f.x + f.fd*26; p.z = f.z + .2; p.y = f.y + 92; p.vx = 0; p.vy = 0; p.fl = false; continue; }
+    p.z = clamp(p.z, 0, ZD);
+    if (!p.fl && p.y <= 0) continue;
+    p.x += p.vx*dt; p.vy -= 1500*dt; p.y += p.vy*dt;
+    if (p.fl && !p.hit){
+      const t = 1 - p.o, ft = G.f[t], c = PR[p.k];
+      if (ft.hp > 0 && Math.abs(p.x - ft.x) < 38 && Math.abs(p.z - ft.z) < 20 && p.y < ft.y + 100 && p.y + PHT[p.k]*.8 > ft.y){
+        p.hit = true; const dx = Math.sign(p.vx) || p.fd; p.vx *= -.25;
+        damage(t, c.dmg, c.kb, c.st, !!c.big, 0, dx);
+      }
+    }
+    if (p.y <= 0){ p.y = 0; p.vy = 0; p.vx = 0; p.fl = false; p.hit = false; }
+    p.x = clamp(p.x, 30, WW - 30);
+  }
+}
 function applyInput(i, k, d){
   if (!G || G.over) return;
   const f = G.f[i];
@@ -541,6 +639,7 @@ function applyInput(i, k, d){
   else if (k === 'p') doMelee(i);
   else if (k === 's') doSpecial(i);
   else if (k === 'u') doUlt(i);
+  else if (k === 'g') doGrab(i);
 }
 
 /* ---------- effects ---------- */
@@ -560,6 +659,9 @@ function handleEv(m){
     texts.push({x:x + (Math.random()*30-15), y:y-50, s:'-' + m.d, c:'#ff5b6e', t0:now});
     if (m.tl) tiltT[m.i] = now + 450;
     if (m.th){ shake = 18; spawn(x, y, '#ffffff', 22, 7); texts.push({x, y:y-84, s:'Smashed!', c:'#ffd166', t0:now}); }
+  } else if (m.k === 'tx'){
+    const mz = m.z || 0;
+    texts.push({x:X(m.x), y:ZF + mz - (m.y || 0) - 130*ps(mz), s:m.s, c:m.c, t0:now});
   } else if (m.k === 'ult'){
     banner = {s:ULTN[fighters[m.i]], c:F[fighters[m.i]].c, t0:now};
   }
@@ -600,12 +702,12 @@ function tapBtn(btn, k){
   ['pointerup','pointercancel','pointerleave'].forEach(ev => btn.addEventListener(ev, () => btn.classList.remove('down')));
 }
 holdBtn($('bb'), 'b'); holdBtn($('bf'), 'f'); holdBtn($('bup'), 'u'); holdBtn($('bdn'), 'd');
-tapBtn($('bp'), 'p'); tapBtn($('bs'), 's'); tapBtn($('bu'), 'u');
+tapBtn($('bp'), 'p'); tapBtn($('bs'), 's'); tapBtn($('bu'), 'u'); tapBtn($('bgb'), 'g');
 const KEYS = {ArrowLeft:'b', a:'b', ArrowRight:'f', d:'f', ArrowUp:'u', w:'u', ArrowDown:'d', s:'d'};
 addEventListener('keydown', e => {
   if (e.repeat) return;
   if (KEYS[e.key]){ held[KEYS[e.key]] = true; updMv(); }
-  else if (e.key === 'j') sendInput('p'); else if (e.key === 'k') sendInput('s'); else if (e.key === 'l') sendInput('u');
+  else if (e.key === 'j') sendInput('p'); else if (e.key === 'k') sendInput('s'); else if (e.key === 'l') sendInput('u'); else if (e.key === 'h') sendInput('g');
 });
 addEventListener('keyup', e => { if (KEYS[e.key]){ held[KEYS[e.key]] = false; updMv(); } });
 
@@ -1014,6 +1116,80 @@ function drawEnt(e, d, t){
   ctx.restore();
 }
 
+
+/* ---------- floor objects ---------- */
+const OLN = '#18122b';
+const pRect = (g, x, y, w, h, r, fill, lw) => { g.beginPath(); g.roundRect(x, y, w, h, r); g.fillStyle = fill; g.fill();
+  if (lw !== 0){ g.strokeStyle = OLN; g.lineWidth = lw || 2; g.stroke(); } };
+const pEll = (g, x, y, rx, ry, fill, lw, rot) => { g.beginPath(); g.ellipse(x, y, rx, ry, rot || 0, 0, 7); g.fillStyle = fill; g.fill();
+  if (lw){ g.strokeStyle = OLN; g.lineWidth = lw; g.stroke(); } };
+const PD = {
+  chair(g){
+    const W = '#b5804a', D = '#8a5d33';
+    pRect(g, -17, -34, 5, 34, 2, D); pRect(g, 12, -34, 5, 34, 2, D);
+    pRect(g, -18, -76, 5, 44, 2, W); pRect(g, 13, -76, 5, 44, 2, W);
+    pRect(g, -18, -73, 36, 7, 2, W); pRect(g, -18, -60, 36, 6, 2, W);
+    pRect(g, -23, -38, 46, 9, 3, W);
+    pRect(g, -21, -30, 5, 30, 2, W); pRect(g, 16, -30, 5, 30, 2, W);
+  },
+  tv(g, t){
+    pRect(g, -24, -9, 10, 9, 2, '#3a2d28'); pRect(g, 14, -9, 10, 9, 2, '#3a2d28');
+    g.lineCap = 'round';
+    for (const [w, c] of [[4.4, OLN], [1.8, '#cfc9be']]){
+      g.strokeStyle = c; g.lineWidth = w; g.beginPath(); g.moveTo(-4, -54); g.lineTo(-22, -78); g.moveTo(6, -54); g.lineTo(24, -74); g.stroke();
+    }
+    pRect(g, -32, -56, 64, 49, 7, '#8a6a47');
+    pRect(g, -26, -50, 40, 37, 9, '#1c2326');
+    const gr = g.createRadialGradient(-8, -38, 3, -6, -30, 28); gr.addColorStop(0, '#c4ece1'); gr.addColorStop(1, '#5f9a8e');
+    g.beginPath(); g.roundRect(-23, -47, 34, 31, 8); g.fillStyle = gr; g.fill();
+    g.save(); g.clip(); g.globalAlpha = .35; g.fillStyle = '#fff';
+    for (let k = 0; k < 5; k++) g.fillRect(-23, -47 + ((t/40 + k*7) % 31), 34, 1.6);
+    g.restore();
+    g.strokeStyle = '#ffffff99'; g.lineWidth = 2; g.beginPath(); g.arc(-12, -36, 10, Math.PI*1.1, Math.PI*1.5); g.stroke();
+    pEll(g, 22, -43, 4.2, 4.2, '#d9d2c4', 1.6); pEll(g, 22, -31, 4.2, 4.2, '#d9d2c4', 1.6);
+    g.strokeStyle = '#3a2d28'; g.lineWidth = 1.4; g.beginPath();
+    for (let k = 0; k < 3; k++){ g.moveTo(17, -23 + k*3.4); g.lineTo(27, -23 + k*3.4); } g.stroke();
+  },
+  fridge(g){
+    pRect(g, -24, -7, 10, 7, 2, '#4a4a52'); pRect(g, 14, -7, 10, 7, 2, '#4a4a52');
+    pRect(g, -28, -124, 56, 120, 6, '#dfe8e6');
+    g.fillStyle = '#00000012'; g.fillRect(8, -120, 18, 112);
+    g.strokeStyle = OLN; g.lineWidth = 2.4; g.beginPath(); g.moveTo(-28, -84); g.lineTo(28, -84); g.stroke();
+    pRect(g, 15, -112, 4, 20, 2, '#9aa3a8', 1.6); pRect(g, 15, -76, 4, 36, 2, '#9aa3a8', 1.6);
+    pRect(g, -20, -108, 9, 9, 2, '#ff6a3d', 1.4); pRect(g, -8, -100, 8, 8, 2, '#ffd166', 1.4); pRect(g, -19, -62, 11, 13, 1, '#ffffff', 1.4);
+    pEll(g, -12, -20, 7, 4, '#b9824a66', 0);
+  },
+  bear(g){
+    const B = '#4a8fe0', L = '#9cc7f5';
+    pEll(g, -22, -12, 13, 11, B, 2.2); pEll(g, 22, -12, 13, 11, B, 2.2);
+    pEll(g, -22, -10, 7, 6, L, 1.6); pEll(g, 22, -10, 7, 6, L, 1.6);
+    pEll(g, 0, -36, 28, 30, B, 2.4); pEll(g, 0, -32, 16, 20, L, 1.8);
+    pEll(g, -31, -46, 9, 16, B, 2.2, .5); pEll(g, 31, -46, 9, 16, B, 2.2, -.5);
+    g.beginPath(); g.moveTo(0, -60); g.lineTo(-11, -67); g.lineTo(-11, -53); g.closePath();
+    g.moveTo(0, -60); g.lineTo(11, -67); g.lineTo(11, -53); g.closePath();
+    g.fillStyle = '#e0364c'; g.fill(); g.strokeStyle = OLN; g.lineWidth = 1.8; g.stroke();
+    pEll(g, 0, -60, 3.6, 3.6, '#b8243a', 1.5);
+    pEll(g, -19, -100, 9, 9, B, 2.2); pEll(g, 19, -100, 9, 9, B, 2.2);
+    pEll(g, -19, -100, 5, 5, L, 0); pEll(g, 19, -100, 5, 5, L, 0);
+    pEll(g, 0, -80, 25, 23, B, 2.4);
+    pEll(g, 0, -73, 12, 9, L, 1.8); pEll(g, 0, -77, 4.6, 3.2, OLN, 0);
+    g.fillStyle = OLN; g.beginPath(); g.arc(-9, -86, 3, 0, 7); g.arc(9, -86, 3, 0, 7); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(-8, -87, 1, 0, 7); g.arc(10, -87, 1, 0, 7); g.fill();
+    g.strokeStyle = OLN; g.lineWidth = 1.8; g.lineCap = 'round'; g.beginPath(); g.moveTo(-4, -70); g.quadraticCurveTo(0, -66, 4, -70); g.stroke();
+  }
+};
+function drawProp(p, d, t){
+  const z = d.z || 0, s = ps(z), gy = ZF + z, x = X(d.x), held = p.h >= 0, sc = held ? s*.72 : s;
+  if (!held){
+    ctx.fillStyle = '#00000055'; ctx.beginPath();
+    ctx.ellipse(x, gy + 3, PWD[p.k]*sc*(1 - Math.min(.5, d.y/300)), 6*sc, 0, 0, 7); ctx.fill();
+  }
+  ctx.save(); ctx.translate(x, gy - d.y*s); ctx.scale(sc, sc);
+  if (p.fl){ const H = PHT[p.k]; ctx.translate(0, -H/2); ctx.rotate(t/110 * ((me === 0 ? p.fd : -p.fd) || 1)); ctx.translate(0, H/2); }
+  PD[p.k](ctx, t);
+  ctx.restore();
+}
+
 function bar(x, y, w, h, v, col){
   ctx.fillStyle = '#ffffff1a'; ctx.beginPath(); ctx.roundRect(x,y,w,h,h/2); ctx.fill();
   const ww = Math.max(0, Math.min(1, v/100)) * w;
@@ -1185,6 +1361,11 @@ function bgHouse(g){
 }
 
 const BGS = []; let bgCur = -1, bgPrev = 0, bgT0 = 0;
+function drawBg(img){                                    /* scenery scrolls slowly behind the fighters (mirrored tile = no seam) */
+  const o = cam*.3;
+  ctx.drawImage(img, -o, 0);
+  ctx.save(); ctx.translate(1440 - o, 0); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
+}
 function drawArena(now){
   if (!BGS.length) BGS.push(mkBg(bgSakura), mkBg(bgSoccer), mkBg(bgHouse));
   const b = V.bg || 0;
@@ -1192,8 +1373,8 @@ function drawArena(now){
   if (b !== bgCur){ bgPrev = bgCur; bgCur = b; bgT0 = now; }          /* new scene: fade over 0.7 s */
   const k = Math.min(1, (now - bgT0)/700);
   if (k >= 1) bgPrev = bgCur;
-  ctx.drawImage(BGS[bgPrev], 0, 0);
-  if (bgCur !== bgPrev){ ctx.globalAlpha = k; ctx.drawImage(BGS[bgCur], 0, 0); ctx.globalAlpha = 1; }
+  drawBg(BGS[bgPrev]);
+  if (bgCur !== bgPrev){ ctx.globalAlpha = k; drawBg(BGS[bgCur]); ctx.globalAlpha = 1; }
   const wj = bgCur === 0 ? (bgPrev === 0 ? 1 : k) : (bgPrev === 0 ? 1 - k : 0);   /* how visible the Japan scene is */
   if (wj > .02){                                                      /* drifting sakura petals */
     ctx.fillStyle = '#ffc2d4'; ctx.globalAlpha = .85*wj;
@@ -1205,6 +1386,12 @@ function drawArena(now){
   }
   ctx.fillStyle = '#ffffff0f'; ctx.fillRect(-20, ZF - 7, 760, ZD + 16);   /* the walkable lane band */
   ctx.fillStyle = '#ffffff26'; ctx.fillRect(-20, ZF - 7, 760, 2); ctx.fillRect(-20, GYN + 9, 760, 2);
+  const lx = X(WW/2);                                                  /* the cut line in the middle of the arena */
+  if (lx > -6 && lx < 726){
+    ctx.save(); ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 10;
+    const lg = ctx.createLinearGradient(0, 56, 0, 360); lg.addColorStop(0, '#ffffff00'); lg.addColorStop(.35, '#ffffffcc'); lg.addColorStop(1, '#ffffffcc');
+    ctx.strokeStyle = lg; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(lx, 56); ctx.lineTo(lx, 360); ctx.stroke(); ctx.restore();
+  }
 }
 
 function draw(){
@@ -1218,6 +1405,12 @@ function draw(){
   for (const e of V.e){ let d = D.e[e.id]; if (!d) d = D.e[e.id] = {x:e.x, y:e.y, z:e.z};
     d.x += (e.x - d.x)*.5; d.y += (e.y - d.y)*.5; d.z += (e.z - d.z)*.5; live[e.id] = 1; }
   for (const id in D.e) if (!live[id]) delete D.e[id];
+  const liveP = {};
+  for (const p of V.p || []){ let d = D.p[p.id]; if (!d) d = D.p[p.id] = {x:p.x, y:p.y, z:p.z};
+    d.x += (p.x - d.x)*.5; d.y += (p.y - d.y)*.5; d.z += (p.z - d.z)*.5; liveP[p.id] = 1; }
+  for (const id in D.p) if (!liveP[id]) delete D.p[id];
+  { const mx = (D.f[0].x + D.f[1].x)/2, vm = me === 0 ? mx : WW - mx;     /* camera follows the middle of the two fighters */
+    cam += (Math.max(0, Math.min(WW - 720, vm - 360)) - cam)*.2; }
 
   ctx.save(); ctx.clearRect(0,0,720,360);
   if (shake > 0){ ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake); shake *= .86; if (shake < .5) shake = 0; }
@@ -1231,8 +1424,9 @@ function draw(){
     const d = D.e[e.id];
     items.push({z: (e.k === 'flood' || e.k === 'bolt') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
   }
+  for (const p of V.p || []){ const d = D.p[p.id]; items.push({z: p.h >= 0 ? D.f[p.h].z + .2 : d.z - .05, p}); }
   items.sort((p, q) => p.z - q.z);
-  for (const it of items){ if (it.e) drawEnt(it.e, D.e[it.e.id], now); else drawFighter(it.f, now); }
+  for (const it of items){ if (it.e) drawEnt(it.e, D.e[it.e.id], now); else if (it.p) drawProp(it.p, D.p[it.p.id], now); else drawFighter(it.f, now); }
 
   parts = parts.filter(q => q.l > 0);
   for (const q of parts){
@@ -1259,7 +1453,8 @@ function draw(){
   const uOk = lv && !m.u && m.ch >= 100;
   $('bu').style.setProperty('--p', (m.u ? 0 : m.ch) + '%');
   $('bu').classList.toggle('ready', uOk); $('bu').classList.toggle('off', !uOk && !(lv && !m.u));
-  $('bu').firstChild.textContent = m.u ? 'Used' : 'Ultimate';
+  $('bu').firstChild.textContent = 'Ultimate';
+  $('bgb').firstChild.textContent = m.hd ? 'Throw' : 'Grab'; $('bgb').classList.toggle('ready', lv && !!m.hd);
 }
 requestAnimationFrame(draw);
 
