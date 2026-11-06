@@ -47,7 +47,7 @@ canvas{width:720px;height:360px;display:block}
 .ud .cb{flex:1;font-size:36px}
 #bp{width:98px;background:var(--c);color:#1b1730;font-size:20px}
 #bp small{color:#1b1730aa}
-#bs{width:82px}
+#bs{width:92px}
 #bgb{position:absolute;right:14px;top:62px;width:96px;height:66px;font-size:22px;background:#ffd166;color:#1b1730}
 #bgb small{color:#1b1730aa}
 #bfly{position:absolute;right:14px;top:134px;width:96px;height:66px;font-size:22px;background:#9be7ff;color:#1b1730;display:none}
@@ -117,8 +117,8 @@ canvas{width:720px;height:360px;display:block}
       </div>
       <div class="g">
         <button class="cb" id="bp">Punch<small>tap again: kick</small></button>
-        <button class="cb" id="bs">Special</button>
-        <button class="cb" id="bu">Ultimate<small>every 7s</small></button>
+        <button class="cb" id="bs">Special<small>every 7s</small></button>
+        <button class="cb" id="bu">Ultimate<small>every 11s</small></button>
       </div>
       </div>
     </div>
@@ -158,6 +158,20 @@ const SP = [ /* special moves, one per element */
   {k:'bflame', v:330, y:32, r:15, dmg:12, kb:150, st:260, ev:30}
 ];
 const PRE = 'eduel1-';
+/* ---------- sound effects ---------- */
+const SFX = {
+  hit:  ['https://gjyeknwtoofpuvoaftfj.supabase.co/storage/v1/object/public/suara/combat.mp3', 'https://gjyeknwtoofpuvoaftfj.supabase.co/storage/v1/object/public/suara/punch1.mp3'],     /* punch + got hit: one of these at random */
+  fire: ['https://gjyeknwtoofpuvoaftfj.supabase.co/storage/v1/object/public/suara/apio.mp3'],
+  boom: ['https://gjyeknwtoofpuvoaftfj.supabase.co/storage/v1/object/public/suara/lrdak.mp3']
+};
+const SFXA = {}, sfxLast = {};
+for (const k in SFX) SFXA[k] = SFX[k].map(u => { const a = new Audio(u); a.preload = 'auto'; return a; });
+function playSfx(k){
+  const now = performance.now(); if (now - (sfxLast[k] || 0) < 70) return; sfxLast[k] = now;
+  const l = SFXA[k]; if (!l) return;
+  const a = l[Math.floor(Math.random()*l.length)].cloneNode(); a.volume = k === 'boom' ? 1 : .8;
+  const pr = a.play(); if (pr && pr.catch) pr.catch(() => {});
+}
 /* The floor is a band: feet can stand anywhere from y=ZF (far away) to y=GYN (close to the viewer). z = 0..ZD */
 const ZF = 216, ZD = 52, GYN = ZF + ZD;
 /* The arena is 2x wider than the screen; the camera follows the fighters. A cut line marks the middle. */
@@ -178,7 +192,7 @@ addEventListener('resize', fit); fit();
 let peer, isHost = false, me = 0, phase = 'lobby';
 let picks = [null,null], fighters = [null,null], pend = false;
 let G = null, tickId = null, lastT = 0;
-const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, u:false, s:false, r:false, sh:false, hd:0, fy:false, fr:false, hi:false});
+const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, sn:0, u:false, s:false, r:false, sh:false, hd:0, fy:false, fr:false, hi:false});
 let V = {f:[blankF(START[0], 1), blankF(START[1], -1)], e:[], p:[]};
 let D = mkD();
 let parts = [], texts = [], shake = 0, banner = null, tiltT = [0,0,0];
@@ -346,11 +360,12 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const later = (at, fn) => G.pend.push({at, fn});
 const rm = e => { G.e = G.e.filter(x => x !== e); };
 const MAXHITS = 3;                      /* punches + kicks allowed per second */
+const SPMAX = 4;                        /* special presses per charge; recharges 7 s after the last one */
 const DMGX = .5;                        /* every attack's damage is multiplied by this (lower = longer fights) */
 
 /* x = left/right, z = depth (0 far .. ZD close), y = height (only from being knocked up), fd = facing (+1 world-right / -1 world-left) */
 function mk(i){ return {x:START[i], y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0, fd:dir(i), hits:[], taken:[], need:4 + Math.floor(Math.random()*3), a:0, aUntil:0, stun:0, root:0,
-                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, flyUntil:0, flyCd:0, hid:false}; }
+                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spN:0, spGap:0, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, flyUntil:0, flyCd:0, hid:false}; }
 /* the nearest living opponent of fighter i (the one an ultimate or grab aims at) */
 function foe(i){
   let b = -1, bd = 1e9;
@@ -359,8 +374,8 @@ function foe(i){
 }
 function beginFight(){
   const now = performance.now();
-  G = {f:fighters.map((_, i) => mk(i)), e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps(); G.fly = null; G.beastAt = now + 19000 + Math.random()*7000;
-  G.f.forEach(f => { f.spAt = now + 4000 + Math.random()*2000; f.ultAt = now + 7000; f.flyCd = now + 2500; });
+  G = {f:fighters.map((_, i) => mk(i)), e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps(); G.fly = null; G.beastAt = nextBeast(now);
+  G.f.forEach(f => { f.spN = 0; f.spAt = now + 7000; f.spGap = 0; f.ultAt = now + 11000; f.flyCd = now + 2500; });
   fighters.forEach((el, i) => { if (el === 2) spawnPandas(i); });
   lastT = now; clearInterval(tickId); tickId = setInterval(loop, 33);
 }
@@ -475,7 +490,8 @@ function loop(){
     if (free && f.mz) f.z = clamp(f.z + f.mz * 95 * dt, 0, ZD);
     if (now < f.flyUntil && can && !f.hold){ f.y += clamp(74 - f.y, -320*dt, 320*dt); f.vy = 0; }
     else if (f.y > 0 || f.vy > 0){ f.vy -= 1700*dt; f.y += f.vy*dt; if (f.y <= 0){ f.y = 0; f.vy = 0; } }
-    f.ch = clamp(100 - (f.ultAt - now)/70, 0, 100);   /* ultimate is ready again every 7 seconds */
+    f.ch = clamp(100 - (f.ultAt - now)/110, 0, 100);   /* ultimate is ready again every 11 seconds */
+    if (f.spN <= 0 && now >= f.spAt) f.spN = SPMAX;   /* special recharges every 7 s with 4 uses */
   }
   /* keep fighters on the arena; they only bump when they share a lane, so you can walk around each other */
   G.f.forEach(f => { f.x = clamp(f.x, 34, WW-34); });
@@ -553,7 +569,7 @@ function loop(){
 function snapshot(){
   const now = performance.now();
   V = {t:'s', bg:Math.floor(bgT / BG_SECONDS) % 3,
-    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:now >= f.spAt, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, hd:f.hold ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid})),
+    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:f.spN > 0, sn:f.spN, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, hd:f.hold ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid})),
     e: G.e.map(e => ({id:e.id, k:e.k, o:e.o, x:r1(e.x), y:r1(e.y), z:r1(e.z || 0), r:e.r||0, a:Math.round(e.age),
                       w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', g:e.tg || 0, tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)})),
     p: G.p.map(p => ({id:p.id, k:p.k, x:r1(p.x), y:r1(p.y), z:r1(p.z), h:p.h, fl:p.fl ? 1 : 0, fd:p.fd}))};
@@ -564,7 +580,9 @@ function snapshot(){
 function proj(i, o, d){
   const f = G.f[i]; if (d === undefined) d = f.fd;
   const e = Object.assign({id:++G.eid, o:i, x:f.x + d*40, z:f.z, fd:d, age:0, tg:foe(i)}, o);
-  e.y = (o.y || 40) + f.y; e.vx = d * o.v; G.e.push(e); return e;
+  e.y = (o.y || 40) + f.y; e.vx = d * o.v; G.e.push(e);
+  if (o.k === 'fb' || o.k === 'bflame') ev({k:'snd', n:'fire'});
+  return e;
 }
 function clearTrees(o){ G.e.filter(x => x.k === 'tree' && x.o === o).forEach(x => { G.f[x.tg].root = 0; }); G.e = G.e.filter(x => !(x.k === 'tree' && x.o === o)); }
 
@@ -577,6 +595,7 @@ function doMelee(i){
   const kick = f.lastKind === 1 && now - f.lastP < 650, fd = f.fd;
   f.lastKind = kick ? 2 : 1; f.lastP = now;
   f.a = kick ? 2 : 1; f.aUntil = now + (kick ? 320 : 240); f.cdUntil = now + (kick ? 420 : 260);
+  ev({k:'snd', n:'hit'});
   later(now + 110, () => {
     if (performance.now() < f.stun) return;
     G.f.forEach((o, t) => {
@@ -589,8 +608,9 @@ function doMelee(i){
 }
 function doSpecial(i){
   const now = performance.now(), f = G.f[i];
-  if (now < f.stun || now < f.spAt || f.hold) return;
-  f.spAt = now + 4000 + Math.random()*2000;
+  if (now < f.stun || f.spN <= 0 || now < f.spGap || f.hold) return;
+  f.spN--; f.spGap = now + 250;
+  if (f.spN <= 0) f.spAt = now + 7000;
   f.a = 3; f.aUntil = now + 350;
   const d = f.fd;
   later(now + 150, () => proj(i, SP[fighters[i]], d));
@@ -598,7 +618,7 @@ function doSpecial(i){
 function doUlt(i){
   const now = performance.now(), f = G.f[i], d = f.fd, tgi = foe(i), o = G.f[tgi];
   if (now < f.stun || now < f.ultAt || f.hold) return;
-  f.ultAt = now + 7000; f.ch = 0; f.a = 4; f.aUntil = now + 700;
+  f.ultAt = now + 11000; f.ch = 0; f.a = 4; f.aUntil = now + 700;
   ev({k:'ult', i});
   const el = fighters[i];
   if (el === 0){        /* water: flood the arena, unicorn electrocutes the enemy */
@@ -703,8 +723,8 @@ function updProps(dt){
   }
 }
 
-/* ---------- wild beast: every 19-26 s an elephant / yeti / gorilla carries one fighter around for 7 s, then hurls it at the other ---------- */
-const nextBeast = now => now + 19000 + Math.random()*7000;
+/* ---------- wild beast: every 20-32 s an elephant / yeti / gorilla carries one fighter around for 7 s, then hurls it at the other ---------- */
+const nextBeast = now => now + 20000 + Math.random()*12000;   /* 20-32 s, randomized */
 function spawnBeast(now){
   const alv = G.f.map((f, i) => i).filter(i => G.f[i].hp > 0), vi = alv[Math.floor(Math.random()*alv.length)] || 0, v = G.f[vi], side = Math.random() < .5 ? -1 : 1, kind = Math.floor(Math.random()*3);
   G.e.push({id:++G.eid, k:'beast', o:vi, vi, r:kind, x:clamp(v.x + side*460, -90, WW + 90), y:0, z:v.z, age:0, fd:-side,
@@ -842,12 +862,15 @@ function handleEv(m){
   const now = performance.now();
   if (m.k === 'hit'){
     const mz = m.z || 0, x = X(m.x), y = ZF + mz - m.y - 58*ps(mz), col = F[fighters[m.i]].c;
+    playSfx(m.th || m.d >= 9 ? 'boom' : 'hit');
     spawn(x, y, '#d1002f', m.big ? 34 : 18, m.big ? 6 : 4.5);
     spawn(x, y, col, m.big ? 12 : 6, 4);
     shake = Math.max(shake, m.big ? 14 : (m.i === me ? 7 : 4));
     texts.push({x:x + (Math.random()*30-15), y:y-50, s:'-' + m.d, c:'#ff5b6e', t0:now});
     if (m.tl) tiltT[m.i] = now + 450;
     if (m.th){ shake = 18; spawn(x, y, '#ffffff', 22, 7); texts.push({x, y:y-84, s:'Smashed!', c:'#ffd166', t0:now}); }
+  } else if (m.k === 'snd'){
+    playSfx(m.n);
   } else if (m.k === 'tx'){
     const mz = m.z || 0;
     texts.push({x:X(m.x), y:ZF + mz - (m.y || 0) - 130*ps(mz), s:m.s, c:m.c, t0:now});
@@ -1791,6 +1814,7 @@ function draw(){
   ctx.restore();
 
   const m = V.f[me], lv = phase === 'fight';
+  $('bs').firstChild.textContent = 'Special' + (m.sn > 0 ? ' ×' + m.sn : '');
   $('bs').classList.toggle('ready', lv && m.sp); $('bs').classList.toggle('off', !lv || !m.sp);
   const uOk = lv && !m.u && m.ch >= 100;
   $('bu').style.setProperty('--p', (m.u ? 0 : m.ch) + '%');
