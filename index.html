@@ -142,6 +142,7 @@ const F = [
   {name:'Soil',  icon:'🪨', c:'#b9824a'}
 ];
 const ULTN = ['Unicorn Storm','Tank Strike','Panda Rush','Forest Grip'];
+const BEASTS = ['Elephant','Yeti','Gorilla'];
 const SP = [ /* special moves, one per element */
   {k:'wj',   v:560, y:46, r:10, dmg:9,  kb:120, st:200},
   {k:'fb',   v:340, y:24, r:15, dmg:12, kb:160, st:280},
@@ -316,7 +317,7 @@ function mk(i){ return {x:START[i], y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0,
                         ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0}; }
 function beginFight(){
   const now = performance.now();
-  G = {f:[mk(0), mk(1)], e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps();
+  G = {f:[mk(0), mk(1)], e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps(); G.fly = null; G.beastAt = now + 19000 + Math.random()*7000;
   G.f.forEach(f => { f.spAt = now + 4000 + Math.random()*2000; f.ultAt = now + 7000; });
   [0,1].forEach(i => { if (fighters[i] === 2) spawnPandas(i); });
   lastT = now; clearInterval(tickId); tickId = setInterval(loop, 33);
@@ -447,10 +448,12 @@ function loop(){
     const push = (44 - Math.abs(gap))/2, sg = gap >= 0 ? 1 : -1;
     a.x = clamp(a.x - sg*push, 34, WW-34); b.x = clamp(b.x + sg*push, 34, WW-34);
   }
-  holdTick(now); updProps(dt);
+  holdTick(now); updProps(dt); flyTick(now);
 
+  if (!G.e.some(x => x.k === 'beast') && now >= G.beastAt) spawnBeast(now);
   for (const e of G.e.slice()){
     e.age += dt*1000;
+    if (e.k === 'beast'){ beastTick(e, dt, now); continue; }
     if (e.k === 'panda'){ pandaTick(e, dt, now); continue; }
     if (e.k === 'flood'){ if (e.age > 6000) rm(e); continue; }
     if (e.k === 'uni'){ if (e.age > 5400) rm(e); continue; }
@@ -631,6 +634,68 @@ function updProps(dt){
     p.x = clamp(p.x, 30, WW - 30);
   }
 }
+
+/* ---------- wild beast: every 19-26 s an elephant / yeti / gorilla carries one fighter around for 7 s, then hurls it at the other ---------- */
+const nextBeast = now => now + 19000 + Math.random()*7000;
+function spawnBeast(now){
+  const vi = Math.random() < .5 ? 0 : 1, v = G.f[vi], side = Math.random() < .5 ? -1 : 1, kind = Math.floor(Math.random()*3);
+  G.e.push({id:++G.eid, k:'beast', o:vi, vi, r:kind, x:clamp(v.x + side*460, -90, WW + 90), y:0, z:v.z, age:0, fd:-side,
+            mode:'in', walk:true, wt:0, tx:0, tz:0, until:0});
+  ev({k:'beast', n:kind});
+}
+function beastTick(b, dt, now){
+  const v = G.f[b.vi], o = G.f[1 - b.vi];
+  let goal = null, sp = 0, gz = b.z, zs = 80;
+  if (b.mode === 'in'){
+    if (v.hp <= 0) b.mode = 'out';
+    else {
+      goal = v.x; sp = 300; gz = v.z; zs = 160;
+      if (Math.abs(v.x - b.x) < 70 && Math.abs(v.z - b.z) < 14){          /* got you */
+        if (v.hold) dropHold(b.vi);
+        if (o.hold && !o.hold.p) dropHold(1 - b.vi);
+        b.mode = 'carry'; b.until = now + 7000; b.wt = 0; b.tx = b.x; b.tz = b.z;
+        tx(v, 'Grabbed by a ' + BEASTS[b.r] + '!', '#ff8a8a');
+      }
+    }
+  }
+  if (b.mode === 'carry'){
+    if (v.hp <= 0){ b.mode = 'out'; }
+    else {
+      if (now >= b.wt){
+        b.tx = clamp(b.x + (Math.random()*600 - 300), Math.max(60, o.x - 500), Math.min(WW - 60, o.x + 500));
+        b.tz = Math.random()*ZD; b.wt = now + 1200 + Math.random()*1200;
+      }
+      goal = b.tx; sp = 130; gz = b.tz;
+      v.x = b.x + b.fd*62; v.z = Math.min(ZD, b.z + .3); v.y = b.y + 110; v.vy = 0; v.kx = 0; v.a = 0;
+      v.stun = Math.max(v.stun, now + 150);
+      if (now >= b.until){                                                /* hurl it at the other fighter */
+        const dist = o.x - v.x, d = Math.sign(dist) || b.fd;
+        b.fd = d; b.mode = 'out';
+        damage(b.vi, 10, 0, 1300, true, 520, d);
+        v.kx = clamp(dist, -640, 640)*3.91; v.z = o.z;
+        G.fly = {v:b.vi, until:now + 1300, hit:false};
+        tx(v, 'Hurled!', '#ffd166');
+      }
+    }
+  }
+  if (b.mode === 'out'){
+    goal = b.x < WW/2 ? -140 : WW + 140; sp = 220;
+    if (b.x < -100 || b.x > WW + 100){ rm(b); G.beastAt = nextBeast(now); return; }
+  }
+  let walking = false;
+  if (goal !== null){ const dd = goal - b.x; if (Math.abs(dd) > 3){ b.x += Math.sign(dd)*Math.min(Math.abs(dd), sp*dt); b.fd = Math.sign(dd); walking = true; } }
+  const dz = gz - b.z; if (Math.abs(dz) > .5){ b.z = clamp(b.z + clamp(dz, -zs*dt, zs*dt), 0, ZD); walking = true; }
+  b.walk = walking;
+}
+function flyTick(now){
+  const fl = G.fly; if (!fl) return;
+  const v = G.f[fl.v], o = G.f[1 - fl.v];
+  if (now > fl.until){ G.fly = null; return; }
+  if (!fl.hit && o.hp > 0 && Math.abs(v.x - o.x) < 46 && Math.abs(v.z - o.z) < 20 && Math.abs(v.y - o.y) < 80){
+    fl.hit = true; damage(1 - fl.v, 24, 520, 900, true, 0, Math.sign(o.x - v.x) || 1);
+    tx(o, 'Bowled over!', '#ffd166');
+  }
+}
 function applyInput(i, k, d){
   if (!G || G.over) return;
   const f = G.f[i];
@@ -662,6 +727,8 @@ function handleEv(m){
   } else if (m.k === 'tx'){
     const mz = m.z || 0;
     texts.push({x:X(m.x), y:ZF + mz - (m.y || 0) - 130*ps(mz), s:m.s, c:m.c, t0:now});
+  } else if (m.k === 'beast'){
+    banner = {s:'A wild ' + BEASTS[m.n] + '!', c:'#ff8a8a', t0:now, dur:1800};
   } else if (m.k === 'ult'){
     banner = {s:ULTN[fighters[m.i]], c:F[fighters[m.i]].c, t0:now};
   }
@@ -1092,6 +1159,9 @@ function drawEnt(e, d, t){
         ctx.lineTo(p0[0] + (rnd(b + 90) - .5)*50, p0[1] + (rnd(b + 95) - .5)*50); ctx.stroke(); }
       ctx.fillStyle = '#fff3a0'; ctx.globalAlpha = .9; disc(ex, ey, 6 + rnd(7)*8);
       break; }
+    case 'beast':
+      ctx.translate(x, gy); ctx.scale(s*1.05, s*1.05);
+      drawBeast(ctx, e.r, 0, 0, ds, e.w, t, e.m === 'carry'); break;
     case 'panda':
       ctx.translate(x, gy); ctx.scale(s, s);
       drawPanda(ctx, 0, 0, (me === 0 ? e.fd : -e.fd) || 1, e.w, e.m === 'atk', t, e.id); break;
@@ -1178,6 +1248,49 @@ const PD = {
     g.strokeStyle = OLN; g.lineWidth = 1.8; g.lineCap = 'round'; g.beginPath(); g.moveTo(-4, -70); g.quadraticCurveTo(0, -66, 4, -70); g.stroke();
   }
 };
+
+function drawBeast(g, kind, x, y, sd, walk, t, grab){
+  g.save(); g.translate(x, y);
+  g.fillStyle = '#00000055'; g.beginPath(); g.ellipse(0, 4, 62, 9, 0, 0, 7); g.fill();
+  g.scale(sd, 1); g.lineJoin = 'round'; g.lineCap = 'round';
+  const sw = walk ? Math.sin(t/130) : 0;
+  const ln = (pts, w, c) => {
+    for (const [lw, col] of [[w + 4, OLN], [w, c]]){
+      g.strokeStyle = col; g.lineWidth = lw; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]); g.stroke();
+    }
+  };
+  if (kind === 0){                                           /* elephant */
+    const C = '#8d96a8', D = '#737c8e';
+    ln([[-34, -40], [-36 + sw*8, 0]], 18, D); ln([[30, -40], [32 - sw*8, 0]], 18, D);
+    ln([[-60, -82], [-72, -58 + sw*3]], 4, D);
+    pEll(g, 0, -72, 62, 42, C, 2.6);
+    ln([[-18, -40], [-18 - sw*8, 0]], 20, C); ln([[44, -40], [44 + sw*8, 0]], 20, C);
+    pEll(g, 52, -96, 20, 28, '#a9b1c2', 2.4, .2);
+    pEll(g, 72, -92, 28, 26, C, 2.6);
+    if (grab) ln([[90, -84], [106, -72], [112, -100], [102, -128]], 14, C);
+    else ln([[90, -84], [104, -60 + sw*3], [102, -30], [96, -14 + sw*3]], 14, C);
+    ln([[84, -76], [102, -66]], 5, '#fff8e8');
+    g.fillStyle = OLN; g.beginPath(); g.arc(80, -100, 3, 0, 7); g.fill();
+  } else {                                                   /* yeti (1) or gorilla (2) */
+    const Y = kind === 1, B = Y ? '#e6f1fa' : '#3d3d4a', D2 = Y ? '#b9d3ea' : '#2c2c37', BE = Y ? '#cfe3f3' : '#555566', FC = Y ? '#8fb8da' : '#6b5a50';
+    if (!Y) g.scale(1.12, .94);
+    ln([[-10, -60], [-12 + sw*10, 0]], 22, D2);
+    if (grab) ln([[-2, -118], [38, -132], [54, -154]], 16, D2); else ln([[-2, -118], [-20 - sw*10, -88], [-22, -60]], 16, D2);
+    pEll(g, 0, -88, 36, 50, B, 2.6); pEll(g, 6, -82, 22, 32, BE, 0);
+    ln([[10, -60], [10 - sw*10, 0]], 24, B);
+    pEll(g, 10 - sw*10 + 6, -4, 16, 7, D2, 2);
+    if (grab) { ln([[18, -118], [52, -140], [66, -162]], 16, B); pEll(g, 66, -164, 10, 10, B, 2); }
+    else { ln([[18, -118], [34 + sw*10, -86], [40, -60]], 16, B); pEll(g, 40, -58, 9, 9, B, 2); }
+    if (Y) for (const [px, py] of [[-8, -164], [4, -172], [16, -166]]){ g.beginPath(); g.moveTo(px - 7, py + 10); g.lineTo(px, py - 8); g.lineTo(px + 7, py + 10); g.closePath(); g.fillStyle = B; g.fill(); g.strokeStyle = OLN; g.lineWidth = 2; g.stroke(); }
+    pEll(g, 8, -146, 22, 22, B, 2.6); pEll(g, 15, -143, 14, 13, FC, 1.6);
+    g.fillStyle = OLN; g.beginPath(); g.arc(14, -148, 2.6, 0, 7); g.arc(24, -148, 2.6, 0, 7); g.fill();
+    g.strokeStyle = OLN; g.lineWidth = 2.6; g.beginPath(); g.moveTo(9, -154); g.lineTo(18, -151); g.moveTo(28, -154); g.lineTo(21, -151); g.stroke();
+    if (Y){ g.beginPath(); g.moveTo(11, -137); g.lineTo(26, -137); g.lineTo(18, -128); g.closePath(); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 1.6; g.stroke(); }
+    else { g.lineWidth = 2.2; g.beginPath(); g.moveTo(11, -136); g.quadraticCurveTo(19, -132, 27, -136); g.stroke(); }
+  }
+  g.restore();
+}
 function drawProp(p, d, t){
   const z = d.z || 0, s = ps(z), gy = ZF + z, x = X(d.x), held = p.h >= 0, sc = held ? s*.72 : s;
   if (!held){
