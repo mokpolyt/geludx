@@ -147,7 +147,7 @@ const F = [
   {name:'Sickle', icon:'🔥', c:'#ff4fa0'},
   {name:'Propeller', icon:'🚁', c:'#b48cff'}
 ];
-const ULTN = ['Unicorn Storm','Tank Strike','Panda Rush','Forest Grip','Flame Rider','Bamboo Spear'];
+const ULTN = ['Unicorn Storm','Lava Eruption','Panda Storm','Forest Grip','Flame Rider','Bamboo Juggle'];
 const BEASTS = ['Elephant','Yeti','Gorilla'];
 const SP = [ /* special moves, one per element */
   {k:'wj',   v:560, y:46, r:10, dmg:9,  kb:120, st:200},
@@ -192,7 +192,7 @@ addEventListener('resize', fit); fit();
 let peer, isHost = false, me = 0, phase = 'lobby';
 let picks = [null,null], fighters = [null,null], pend = false;
 let G = null, tickId = null, lastT = 0;
-const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, sn:0, u:false, s:false, r:false, sh:false, hd:0, fy:false, fr:false, hi:false});
+const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, sn:0, u:false, s:false, r:false, sh:false, bn:false, hd:0, fy:false, fr:false, hi:false});
 let V = {f:[blankF(START[0], 1), blankF(START[1], -1)], e:[], p:[]};
 let D = mkD();
 let parts = [], texts = [], shake = 0, banner = null, tiltT = [0,0,0];
@@ -365,7 +365,7 @@ const DMGX = .5;                        /* every attack's damage is multiplied b
 
 /* x = left/right, z = depth (0 far .. ZD close), y = height (only from being knocked up), fd = facing (+1 world-right / -1 world-left) */
 function mk(i){ return {x:START[i], y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0, fd:dir(i), hits:[], taken:[], need:4 + Math.floor(Math.random()*3), a:0, aUntil:0, stun:0, root:0,
-                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spN:0, spGap:0, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, flyUntil:0, flyCd:0, hid:false}; }
+                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spN:0, spGap:0, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, burn:0, flyUntil:0, flyCd:0, hid:false}; }
 /* the nearest living opponent of fighter i (the one an ultimate or grab aims at) */
 function foe(i){
   let b = -1, bd = 1e9;
@@ -526,9 +526,13 @@ function loop(){
     if (e.k === 'beast'){ beastTick(e, dt, now); continue; }
     if (e.k === 'panda'){ pandaTick(e, dt, now); continue; }
     if (e.k === 'bike'){ bikeTick(e, dt, now); continue; }
-    if (e.k === 'icem'){ if (e.age > 3400) rm(e); continue; }
+    if (e.k === 'lava'){ lavaTick(e, now); continue; }
+    if (e.k === 'lboom'){ if (e.age > 800) rm(e); continue; }
+    if (e.k === 'hwind'){ const hf = G.f[e.o], tg = G.f[e.tg]; e.x = hf.x; e.z = hf.z;
+      if (tg.hp > 0 && !tg.hid && !tg.hold) tg.kx += e.fd*950*dt;        /* the huge wind keeps blowing the enemy away */
+      if (e.age > 2000) rm(e); continue; }
     if (e.k === 'bamboo'){ const tg = G.f[e.tg], hf = G.f[e.o]; e.x = hf.x; e.z = hf.z; e.y = hf.y; e.fd = hf.fd;
-      e.tx = tg.x; e.ty = tg.y; e.tz = tg.z; if (e.age > 3000 || tg.hp <= 0) rm(e); continue; }
+      e.tx = tg.x; e.ty = tg.y; e.tz = tg.z; if (e.age > 2900 || tg.hp <= 0) rm(e); continue; }
     if (e.k === 'flood'){ if (e.age > 6000) rm(e); continue; }
     if (e.k === 'uni'){ if (e.age > 5400) rm(e); continue; }
     if (e.k === 'bolt'){ const tg = G.f[e.tg]; e.tx = tg.x; e.ty = tg.y; e.tz = tg.z; if (e.age > 4000 || tg.hp <= 0) rm(e); continue; }
@@ -569,7 +573,7 @@ function loop(){
 function snapshot(){
   const now = performance.now();
   V = {t:'s', bg:Math.floor(bgT / BG_SECONDS) % 3,
-    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:f.spN > 0, sn:f.spN, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, hd:f.hold ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid})),
+    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:f.spN > 0, sn:f.spN, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, bn:now < f.burn, hd:f.hold ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid})),
     e: G.e.map(e => ({id:e.id, k:e.k, o:e.o, x:r1(e.x), y:r1(e.y), z:r1(e.z || 0), r:e.r||0, a:Math.round(e.age),
                       w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', g:e.tg || 0, tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)})),
     p: G.p.map(p => ({id:p.id, k:p.k, x:r1(p.x), y:r1(p.y), z:r1(p.z), h:p.h, fl:p.fl ? 1 : 0, fd:p.fd}))};
@@ -623,19 +627,14 @@ function doUlt(i){
   const el = fighters[i];
   if (el === 0){        /* water: flood the arena, unicorn electrocutes the enemy */
     waterUlt(i, now);
-  } else if (el === 2){ /* wind: the 4 pandas rush the enemy */
+  } else if (el === 2){ /* wind: pandas rush, then a huge wind with trees, then pandas again */
     pandaRush(i, now);
-  } else if (el === 1){ /* fire: tank */
-    const tk = {id:++G.eid, k:'tank', o:i, tg:tgi, x:clamp(f.x - d*90, 40, WW-40), y:0, z:f.z, fd:d, age:0};
-    G.e.push(tk);
-    const shell = big => { if (!G.e.includes(tk)) return;
-      const e = proj(i, {k:'fb', v:big?460:420, y:50, r:big?30:14, dmg:big?20:7, kb:big?720:150, st:big?700:250, big}, d);
-      e.x = tk.x + d*50; e.y = 50; e.z = tk.z; };
-    [700,1100,1500].forEach(t => later(now + t, () => shell(false)));
-    later(now + 2100, () => shell(true));
-    later(now + 2900, () => rm(tk));
+    later(now + 2400, () => windStorm(i));
+    later(now + 5000, () => pandaRush(i, performance.now()));
+  } else if (el === 1){ /* fire: lava pit */
+    lavaUlt(i, now);
   } else if (el === 4){ bikeUlt(i, now);
-  } else if (el === 5){ iceUlt(i, now);
+  } else if (el === 5){ bambooUlt(i, now);
   } else {              /* soil: trees grab, boulder follows */
     [-1,1].forEach(side => G.e.push({id:++G.eid, k:'tree', o:i, tg:tgi, side, x:o.x + side*28, y:0, z:o.z, age:0}));
     later(now + 450, () => { o.root = performance.now() + 3000; });
@@ -823,20 +822,83 @@ function doFly(i){
   f.flyUntil = now + 6000; f.flyCd = now + 8000;
   tx(f, 'Flying!', '#9be7ff');
 }
-function iceUlt(i, now){
-  const tgi = foe(i), f = G.f[i], en = G.f[tgi], d = f.fd;
-  const m = {id:++G.eid, k:'icem', o:i, x:en.x, y:0, z:en.z, age:0};
-  later(now + 250, () => {
-    if (en.hp <= 0) return;
-    m.x = en.x; m.z = en.z; G.e.push(m);
-    en.stun = Math.max(en.stun, performance.now() + 3000); en.kx = 0; en.a = 0; en.flyUntil = 0;
-    tx(en, 'Frozen!', '#9be7ff');
+const BAM_T0 = 260, BAM_DT = 420, BAM_N = 6;     /* bamboo ultimate: first hit after 260 ms, then one hit every 420 ms */
+
+/* ---------- Fire ultimate: lava pit swallows the enemy, erupts, throws him up and burns him for 2 s ---------- */
+function lavaUlt(i, now){
+  const tgi = foe(i), f = G.f[i], en = G.f[tgi];
+  if (en.hold) dropHold(tgi);
+  G.e.push({id:++G.eid, k:'lava', o:i, tg:tgi, x:en.x, y:0, z:en.z, age:0, fd:f.fd});
+  en.stun = Math.max(en.stun, now + 2300); en.kx = 0; en.a = 0; en.flyUntil = 0;
+  tx(en, 'Lava!', '#ff6a3d');
+}
+function lavaTick(e, now){
+  const tg = G.f[e.tg];
+  if (tg.hp <= 0){ if (e.hidden) tg.hid = false; rm(e); return; }
+  if (e.age < 1800){
+    if (e.age >= 400){                                    /* sucked down into the lava */
+      tg.y = -Math.min(115, (e.age - 400)/400*115); tg.vy = 0; tg.kx = 0; tg.x = e.x; tg.z = e.z;
+      if (!e.hidden && e.age >= 800){ tg.hid = true; e.hidden = true; }
+    }
+  } else if (!e.popped){                                  /* eruption */
+    e.popped = true;
+    tg.hid = false; e.hidden = false; tg.y = 0; tg.vy = 0; tg.stun = 0; tg.kx = 0;
+    G.e.push({id:++G.eid, k:'lboom', o:e.o, x:e.x, y:0, z:e.z, age:0});
+    ev({k:'snd', n:'boom'}); ev({k:'snd', n:'fire'});
+    const d = Math.sign(tg.x - G.f[e.o].x) || G.f[e.o].fd;
+    damage(e.tg, 24, 260, 1500, true, 650, d);            /* thrown into the air */
+    tg.burn = now + 2000;                                 /* burning for 2 seconds */
+    for (let n = 1; n <= 5; n++) later(now + n*400, () => { if (tg.hp > 0) damage(e.tg, 4, 0, 0, false); });
+  }
+  if (e.age > 2700) rm(e);
+}
+
+/* ---------- Wind ultimate, 2nd beat: huge wind, trees pop up behind her and fly into the enemy ---------- */
+function windStorm(i){
+  if (!G || G.over) return;
+  const now = performance.now(), f = G.f[i]; if (f.hp <= 0) return;
+  const tgi = foe(i), en = G.f[tgi], d = Math.sign(en.x - f.x) || f.fd;
+  f.fd = d; f.a = 4; f.aUntil = now + 500;
+  G.e.push({id:++G.eid, k:'hwind', o:i, tg:tgi, x:f.x, y:0, z:f.z, age:0, fd:d});
+  tx(f, 'Huge wind!', '#7ee6c4');
+  [150, 750, 1350].forEach(t => later(now + t, () => spawnWTree(i, tgi)));
+}
+function spawnWTree(i, tgi){
+  if (!G || G.over) return;
+  const f = G.f[i], en = G.f[tgi]; if (f.hp <= 0 || en.hp <= 0) return;
+  const d = Math.sign(en.x - f.x) || f.fd, off = 46 + Math.random()*40;
+  const tr = {id:++G.eid, k:'wtree', o:i, tg:tgi, x:clamp(f.x - d*off, 40, WW-40), y:60, z:clamp(f.z + Math.random()*30 - 15, 0, ZD),
+              age:0, fd:d, r:24, dmg:6, kb:420, st:500, hz:130, mode:''};
+  G.e.push(tr);                                           /* grows out of the ground behind her... */
+  later(performance.now() + 500, () => {                  /* ...then is hurled at the enemy */
+    if (!G.e.includes(tr)) return;
+    const dd = Math.sign(G.f[tgi].x - tr.x) || d;
+    tr.fd = dd; tr.mode = 'fly'; tr.vx = dd*560;
   });
+}
+function drawTreeShape(g, k){
+  g.fillStyle = '#6b4423'; g.fillRect(-8, -120*k, 16, 120*k);
+  g.strokeStyle = '#6b4423'; g.lineWidth = 6; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(0, -90*k); g.lineTo(34, -62*k); g.moveTo(0, -60*k); g.lineTo(-30, -36*k); g.stroke();
+  g.fillStyle = '#4f9d4f';
+  [[0,-128,30],[-20,-112,20],[20,-112,20]].forEach(([cx, cy, r]) => { g.beginPath(); g.arc(cx*k, cy*k, r*k, 0, 7); g.fill(); });
+}
+
+/* ---------- Propeller ultimate: bamboo hits up, down, up, down, up, then a final blow that throws the enemy far ---------- */
+function bambooUlt(i, now){
+  const tgi = foe(i), f = G.f[i], en = G.f[tgi], d = f.fd;
   const bam = {id:++G.eid, k:'bamboo', o:i, x:f.x, y:0, z:f.z, age:0, fd:d, tx:en.x, ty:0, tz:en.z, tg:tgi};
-  later(now + 700, () => G.e.push(bam));
-  [1900, 2300, 2700].forEach((t, n) => later(now + t, () => {
-    if (G.e.includes(bam) && en.hp > 0) damage(tgi, n === 2 ? 18 : 10, 0, 0, n === 2, 0, Math.sign(en.x - f.x) || d);
-  }));
+  later(now + 700, () => {
+    G.e.push(bam);
+    const t0 = performance.now() + BAM_T0;
+    for (let n = 0; n < BAM_N; n++) later(t0 + n*BAM_DT, () => {
+      if (!G.e.includes(bam) || en.hp <= 0) return;
+      const dir = Math.sign(en.x - f.x) || d;
+      if (n === BAM_N - 1){ damage(tgi, 22, 2400, 1100, true, 450, dir); tx(en, 'Smashed away!', '#ffd166'); }
+      else if (n % 2 === 0) damage(tgi, 6, 0, 700, false, 520, dir);      /* hit from below: knocked up */
+      else damage(tgi, 6, 0, 700, false, -900, dir);                       /* hit from above: slammed down */
+    });
+  });
 }
 function applyInput(i, k, d){
   if (!G || G.over) return;
@@ -1266,6 +1328,8 @@ function drawFighter(i, now){
   ctx.fillStyle = '#00000066'; ctx.beginPath(); ctx.ellipse(px, gy + 3, Math.max(6, 34 - d.y*.12)*sc, 7*sc, 0, 0, 7); ctx.fill();
   const sd = (1 ? s.fd : -s.fd) || 1;             /* facing, as seen on this phone */
   const moving = Math.abs(d.x - d.lx) > .4 || Math.abs(d.z - d.lz) > .3;
+  const sunk = d.y < -1;                                   /* sinking into lava: only the part above the floor shows */
+  if (sunk){ ctx.save(); ctx.beginPath(); ctx.rect(-60, 0, 840, gy + 2); ctx.clip(); }
   figure(px + (s.sh ? (Math.random() - .5)*5 : 0), gy - d.y - 52*sc, fighters[i], sd,
     {a:s.a, air:d.y > 6, mv:moving, s:s.s, tilt:Math.max(0, (tiltT[i] - now)/450), flash:s.s && Math.floor(now/70)%2 === 0}, now, sc);
   if (s.sh){                                              /* electrocuted: sparks crawl over the body */
@@ -1279,6 +1343,16 @@ function drawFighter(i, now){
     }
     ctx.restore();
   }
+  if (s.bn){                                              /* burning: flames lick the whole body */
+    ctx.save(); ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 12;
+    for (let n = 0; n < 9; n++){
+      const fy = gy - d.y - (6 + n*11)*sc, fx = px + Math.sin(now/90 + n*1.7)*13*sc, h = (11 + Math.sin(now/60 + n*2.3)*4)*sc;
+      ctx.globalAlpha = .8; ctx.fillStyle = n % 2 ? '#ffd166' : '#ff6a3d';
+      ctx.beginPath(); ctx.ellipse(fx, fy - h*.5, 5.5*sc, h, 0, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+  }
+  if (sunk) ctx.restore();
 }
 
 function drawEnt(e, d, t){
@@ -1398,10 +1472,14 @@ function drawEnt(e, d, t){
       }
       break; }
     case 'bamboo': {
-      const sd = (1 ? e.fd : -e.fd) || 1;
-      const x0 = x + sd*30*s, y0 = gy - e.y - 80*s, x1 = X(e.tx), y1 = ZF + e.tz - e.ty - 58*ps(e.tz);
-      const gk = Math.min(1, e.a/1100) * (e.a > 2400 ? Math.max(0, (3000 - e.a)/600) : 1);
-      const st = ((e.a > 1150 && e.a < 1260) || (e.a > 1550 && e.a < 1660) || (e.a > 1950 && e.a < 2060)) ? 14 : 0;
+      const sd = (1 ? e.fd : -e.fd) || 1, a = e.a, rel = a - BAM_T0;
+      const offFor = n => n >= BAM_N - 1 ? -6 : (n % 2 === 0 ? 34 : -50);     /* aim low for upward hits, high for downward ones */
+      const nc = clamp(Math.floor(rel/BAM_DT), 0, BAM_N - 1), nxt = Math.min(BAM_N - 1, nc + 1);
+      const ph = clamp(((rel - nc*BAM_DT)/BAM_DT - .4)/.5, 0, 1);
+      const off = rel < 0 ? offFor(0) : offFor(nc) + (offFor(nxt) - offFor(nc))*ph;
+      const x0 = x + sd*30*s, y0 = gy - e.y - 80*s, x1 = X(e.tx), y1 = ZF + e.tz - e.ty - 58*ps(e.tz) + off;
+      const gk = Math.min(1, a/180) * (a > 2600 ? Math.max(0, (2900 - a)/300) : 1);
+      const rn = Math.round(rel/BAM_DT), strike = rel >= 0 && rn < BAM_N && Math.abs(rel - rn*BAM_DT) < 90, st = strike ? 16 : 0;
       const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, ux = dx/L, uy = dy/L, len = (L + st)*gk;
       const bx = x0 + ux*len, by = y0 + uy*len;
       ctx.lineCap = 'round';
@@ -1414,6 +1492,54 @@ function drawEnt(e, d, t){
         ctx.moveTo(bx + ux*14, by + uy*14); ctx.lineTo(bx - uy*5 - ux*4, by + ux*5 - uy*4); ctx.lineTo(bx + uy*5 - ux*4, by - ux*5 - uy*4); ctx.closePath(); ctx.fill(); ctx.stroke();
       }
       ctx.fillStyle = '#4f9d4f'; ctx.beginPath(); ctx.ellipse(x0, y0 - 8, 10, 4, -.6, 0, 7); ctx.fill();
+      if (strike){
+        ctx.globalAlpha = .9; ctx.fillStyle = '#ffffff'; disc(bx, by, 8);
+        ctx.strokeStyle = '#fff3a0'; ctx.lineWidth = 3;
+        for (let n = 0; n < 6; n++){ const an = n*1.047 + t/90; line(bx + Math.cos(an)*10, by + Math.sin(an)*10, bx + Math.cos(an)*24, by + Math.sin(an)*24); }
+      }
+      break; }
+    case 'lava': {
+      const gr = Math.min(1, e.a/450), fd = e.a > 2300 ? Math.max(0, (2700 - e.a)/400) : 1, R = 62*gr;
+      ctx.translate(x, gy); ctx.scale(s, s); ctx.globalAlpha = fd;
+      pEll(ctx, 0, 2, R*1.12, R*.3, '#4a1a12', 0);
+      ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 22; pEll(ctx, 0, 2, R, R*.24, '#ff4a1c', 0); ctx.shadowBlur = 0;
+      pEll(ctx, 0, 2, R*.7, R*.16, '#ff8a2c', 0); pEll(ctx, 0, 2, R*.38, R*.09, '#ffd166', 0);
+      for (let b = 0; b < 7; b++){
+        const ph = (t/340 + b*.9) % 1, bx = Math.sin(b*2.3)*R*.7, by = 2 - ph*18*gr;
+        ctx.globalAlpha = fd*(1 - ph); ctx.fillStyle = '#ffb347'; disc(bx, by, 1 + 3*(1 - ph));
+      }
+      break; }
+    case 'lboom': {
+      const k = Math.min(1, e.a/750);
+      ctx.translate(x, gy); ctx.scale(s, s);
+      ctx.globalAlpha = 1 - k; ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 24;
+      ctx.fillStyle = '#ff6a3d'; ctx.beginPath(); ctx.ellipse(0, -10, 30 + k*120, 24 + k*70, 0, 0, 7); ctx.fill();
+      ctx.shadowBlur = 0; ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.ellipse(0, -14 - k*20, (20 + k*80)*(1 - k*.5), 16 + k*50, 0, 0, 7); ctx.fill();
+      if (k < .35){ ctx.fillStyle = '#ffffff'; disc(0, -18, 36*(1 - k/.35)); }
+      const col = Math.min(1, k*3), top = 170*Math.min(1, k*2.4);
+      ctx.globalAlpha = (1 - k)*.9; ctx.fillStyle = '#ff9a3c'; ctx.beginPath(); ctx.moveTo(-26*(1 - k*.4), 0);
+      ctx.quadraticCurveTo(-18, -140*col, 0, -top); ctx.quadraticCurveTo(18, -140*col, 26*(1 - k*.4), 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffd166'; ctx.globalAlpha = 1 - k;
+      for (let n = 0; n < 14; n++){ const an = n*.449, dist = k*(90 + (n % 4)*30); disc(Math.cos(an)*dist, -20 + Math.sin(an)*dist*.5 - k*60 + k*k*80, 1 + 3*(1 - k)); }
+      break; }
+    case 'hwind': {
+      const kk = Math.min(1, e.a/300) * (e.a > 1700 ? Math.max(0, (2000 - e.a)/300) : 1);
+      ctx.lineCap = 'round'; ctx.strokeStyle = '#7ee6c4';
+      for (let n = 0; n < 26; n++){
+        const sp = 700 + (n % 5)*260, pos = (n*97 + t*sp/1000) % 820, len = 60 + (n*53) % 90;
+        const xx = ds > 0 ? pos - 50 : 770 - pos, yy = 66 + (n*41) % 260;
+        ctx.globalAlpha = kk*(.25 + (n % 4)*.12); ctx.lineWidth = 2 + n % 3;
+        line(xx, yy, xx - ds*len, yy + Math.sin(t/200 + n)*3);
+      }
+      ctx.globalAlpha = kk*.8; ctx.lineWidth = 5;
+      for (let n = 0; n < 4; n++){ ctx.beginPath(); ctx.ellipse(x + ds*(30 + n*24), gy - 70 + (n - 1.5)*20, 14 + n*5, 28 + n*8, Math.sin(t/110 + n)*.5, 0, 7); ctx.stroke(); }
+      break; }
+    case 'wtree': {
+      if (e.m === 'fly'){
+        ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(t/110*ds); ctx.translate(0, 62); drawTreeShape(ctx, 1);
+      } else {
+        ctx.translate(x, gy); ctx.scale(s, s); drawTreeShape(ctx, Math.min(1, e.a/260));
+      }
       break; }
     case 'tank': {
       const g = Math.min(1, e.a/250);
@@ -1787,7 +1913,7 @@ function draw(){
   const items = D.f.map((d, i) => ({z:d.z, f:i}));
   for (const e of V.e){
     const d = D.e[e.id];
-    items.push({z: (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
+    items.push({z: e.k === 'lava' ? -999 : (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
   }
   for (const p of V.p || []){ const d = D.p[p.id]; items.push({z: p.h >= 0 ? D.f[p.h].z + .2 : d.z - .05, p}); }
   items.sort((p, q) => p.z - q.z);
