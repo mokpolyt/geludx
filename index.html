@@ -75,7 +75,7 @@ canvas{width:720px;height:360px;display:block}
   <div id="lobby" class="screen on">
     <div class="col">
       <h1>Elemental Duel</h1>
-      <p>Two phones, one arena. Open this page on both.</p>
+      <p>2 or 3 phones, one arena. Open this page on every phone.</p>
       <button class="btn" id="create">Create duel</button>
     </div>
     <div class="col">
@@ -87,10 +87,11 @@ canvas{width:720px;height:360px;display:block}
   </div>
 
   <div id="wait" class="screen">
-    <p>Tell your friend this code</p>
+    <p>Tell your friends this code (up to 2 can join)</p>
     <div id="code">----</div>
     <button class="btn alt" id="copy" style="width:260px">Copy invite link</button>
-    <p>Waiting for your friend to join…</p>
+    <p id="wcount">Players joined: 1 of 3</p>
+    <button class="btn" id="startbtn" style="width:260px" disabled>Start duel</button>
   </div>
 
   <div id="select" class="screen">
@@ -160,7 +161,9 @@ const PRE = 'eduel1-';
 /* The floor is a band: feet can stand anywhere from y=ZF (far away) to y=GYN (close to the viewer). z = 0..ZD */
 const ZF = 216, ZD = 52, GYN = ZF + ZD;
 /* The arena is 2x wider than the screen; the camera follows the fighters. A cut line marks the middle. */
-const WW = 1440, MAXGAP = 600, START = [WW/2 - 210, WW/2 + 210];
+const WW = 1440, MAXGAP = 600;
+const STARTS = {2:[WW/2 - 210, WW/2 + 210], 3:[WW/2 - 260, WW/2, WW/2 + 260]};
+let START = STARTS[2];
 const mkD = () => ({f:START.map(x => ({x, y:0, z:ZD/2, hp:100, lx:x, lz:ZD/2})), e:{}, p:{}});
 const ps = z => 1.10 + .16 * (Math.max(0, Math.min(ZD, z)) / ZD);   /* fighters look bigger when closer */
 
@@ -172,39 +175,54 @@ function fit(){
 addEventListener('resize', fit); fit();
 
 /* ---------- state ---------- */
-let peer, conn, isHost = false, me = 0, phase = 'lobby';
+let peer, isHost = false, me = 0, phase = 'lobby';
 let picks = [null,null], fighters = [null,null], pend = false;
 let G = null, tickId = null, lastT = 0;
 const blankF = (x, fd) => ({x, y:0, z:ZD/2, fd, hp:100, a:0, ch:0, sp:false, u:false, s:false, r:false, sh:false, hd:0, fy:false, fr:false, hi:false});
 let V = {f:[blankF(START[0], 1), blankF(START[1], -1)], e:[], p:[]};
 let D = mkD();
-let parts = [], texts = [], shake = 0, banner = null, tiltT = [0,0];
+let parts = [], texts = [], shake = 0, banner = null, tiltT = [0,0,0];
 let score = [0,0], round = 1, bgT = 0;      /* bgT = seconds of fighting so far; picks the scene */
 const WINS = 2;                          /* rounds needed to win the duel */
 let cam = 0;
-const X = x => (me === 0 ? x : WW - x) - cam;   /* each phone shows itself on the left; cam scrolls the wide arena */
+const X = x => (1 ? x : WW - x) - cam;   /* each phone shows itself on the left; cam scrolls the wide arena */
 
 function show(id){ document.querySelectorAll('.screen').forEach(e => e.classList.toggle('on', e.id === id)); }
 function err(msg){ $('err').textContent = msg; $('create').disabled = false; $('joinbtn').disabled = false; show('lobby'); phase = 'lobby'; }
-function send(m){ if (conn && conn.open) conn.send(m); }
+let conns = [], hostConn = null, N = 2;
+function send(m){ if (isHost) conns.forEach(c => { if (c.open) c.send(m); }); else if (hostConn && hostConn.open) hostConn.send(m); }
 
-/* ---------- connection ---------- */
+/* ---------- connection: one host phone, up to 2 guest phones ---------- */
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 function randCode(){ let s=''; for(let i=0;i<4;i++) s += CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)]; return s; }
 
+function updWait(){
+  if (!isHost) return;
+  const n = conns.filter(c => c.open).length;
+  $('wcount').textContent = 'Players joined: ' + (n + 1) + ' of 3';
+  $('startbtn').disabled = n < 1;
+}
 function create(tries = 0){
   $('create').disabled = true; $('err').textContent = '';
   const code = randCode();
   peer = new Peer(PRE + code);
-  peer.on('open', () => { $('code').textContent = code; phase = 'wait'; show('wait'); });
+  peer.on('open', () => { $('code').textContent = code; isHost = true; me = 0; phase = 'wait'; updWait(); show('wait'); });
   peer.on('error', e => {
     if (e.type === 'unavailable-id' && tries < 5) { peer.destroy(); create(tries+1); }
     else err('Could not start a duel (' + e.type + '). Try again.');
   });
   peer.on('connection', c => {
-    if (conn) { c.close(); return; }
-    conn = c; isHost = true; me = 0;
-    wire(() => resetSelect());
+    if (phase !== 'wait' || conns.length >= 2){
+      c.on('open', () => { c.send({t:'full'}); setTimeout(() => c.close(), 400); });
+      return;
+    }
+    c.slot = conns.length + 1; conns.push(c);
+    c.on('data', m => onData(m, c.slot));
+    c.on('close', () => {
+      if (phase === 'wait'){ conns = conns.filter(x => x !== c); conns.forEach((x, i) => x.slot = i + 1); updWait(); }
+      else if (phase !== 'lobby'){ clearInterval(tickId); show('gone'); }
+    });
+    c.on('open', () => { updWait(); if (conns.filter(x => x.open).length >= 2) setTimeout(() => { if (phase === 'wait') startDuel(); }, 800); });
   });
 }
 function join(code){
@@ -213,26 +231,36 @@ function join(code){
   $('err').textContent = 'Connecting…'; $('joinbtn').disabled = true; $('create').disabled = true;
   peer = new Peer();
   peer.on('open', () => {
-    conn = peer.connect(PRE + code, {reliable:true});
-    isHost = false; me = 1;
-    wire(() => {});
-    setTimeout(() => { if (conn && !conn.open && phase === 'lobby') err('Could not connect. Check the code and try again.'); }, 10000);
+    hostConn = peer.connect(PRE + code, {reliable:true});
+    isHost = false;
+    hostConn.on('data', m => onData(m, 0));
+    hostConn.on('close', () => { if (phase !== 'lobby') { clearInterval(tickId); show('gone'); } });
+    hostConn.on('open', () => {
+      phase = 'wait'; $('code').textContent = code; $('wcount').textContent = 'Connected! Waiting for the host to start…';
+      $('startbtn').style.display = 'none'; $('copy').style.display = 'none'; show('wait');
+    });
+    setTimeout(() => { if (hostConn && !hostConn.open && phase === 'lobby') err('Could not connect. Check the code and try again.'); }, 10000);
   });
   peer.on('error', e => err(e.type === 'peer-unavailable' ? 'No duel found with that code.' : 'Connection error (' + e.type + ').'));
 }
-function wire(onOpen){
-  conn.on('data', onData);
-  conn.on('close', () => { if (phase !== 'lobby') { clearInterval(tickId); show('gone'); } });
-  if (conn.open) onOpen(); else conn.on('open', onOpen);
+function startDuel(){
+  if (phase !== 'wait') return;
+  conns = conns.filter(c => c.open); if (!conns.length) return;
+  conns.forEach((c, i) => c.slot = i + 1);
+  N = conns.length + 1; me = 0;
+  conns.forEach(c => c.send({t:'hi', slot:c.slot, n:N}));
+  resetSelect();
 }
 
-/* ---------- messages ---------- */
-function onData(m){
+/* ---------- messages (from = player slot of the sender, seen by the host) ---------- */
+function onData(m, from){
   switch (m.t){
-    case 'pick':    if (isHost && !pick(1, m.f)) broadcastSel(); break;
-    case 'in':      if (isHost) applyInput(1, m.k, m.d); break;
+    case 'hi':      me = m.slot; N = m.n; break;
+    case 'full':    phase = 'lobby'; err('That duel is full or already started.'); break;
+    case 'pick':    if (isHost && !pick(from, m.f)) broadcastSel(); break;
+    case 'in':      if (isHost) applyInput(from, m.k, m.d); break;
     case 'rematch': if (isHost) resetSelect(); break;
-    case 'sel':     picks = m.picks; pend = false; score = [0,0]; round = 1; if (phase !== 'select') goSelect(); renderSelect(); break;
+    case 'sel':     picks = m.picks; N = picks.length; pend = false; score = picks.map(() => 0); round = 1; if (phase !== 'select') goSelect(); renderSelect(); break;
     case 'cd':      cdShow(m.n); break;
     case 's':       V = m; break;
     case 'ev':      handleEv(m); break;
@@ -247,14 +275,14 @@ function goSelect(){
   $('cdnum').style.display = 'none'; show('select');
 }
 function resetSelect(){
-  clearInterval(tickId); G = null; bgT = 0; picks = [null,null]; pend = false; score = [0,0]; round = 1;
+  clearInterval(tickId); G = null; bgT = 0; picks = Array(N).fill(null); pend = false; score = Array(N).fill(0); round = 1;
   goSelect(); broadcastSel(); renderSelect();
 }
 function broadcastSel(){ send({t:'sel', picks}); }
 function pick(i, f){
   if (picks[i] !== null || picks.includes(f)) return false;
   picks[i] = f; broadcastSel(); renderSelect();
-  if (picks[0] !== null && picks[1] !== null) setTimeout(startCountdown, 900);
+  if (picks.every(p => p !== null)) setTimeout(startCountdown, 900);
   return true;
 }
 function choose(k){
@@ -275,9 +303,10 @@ function renderSelect(){
     b.onclick = () => choose(k);
     box.appendChild(b);
   });
+  const left = picks.filter(p => p === null).length;
   $('selmsg').textContent =
-    picks[me] === null ? 'Pick one. Your friend cannot pick the same fighter.' :
-    picks[1-me] === null ? 'Locked in. Waiting for your friend…' : 'Both ready. Get set!';
+    picks[me] === null ? 'Pick one. Every player needs a different fighter.' :
+    left > 0 ? 'Locked in. Waiting for ' + left + ' more…' : 'Everyone is ready. Get set!';
 }
 
 /* ---------- countdown ---------- */
@@ -291,8 +320,8 @@ function startCountdown(){
   step();
 }
 function enterFight(){
-  fighters = picks.slice();
-  V = {f:[blankF(START[0], 1), blankF(START[1], -1)], e:[], p:[]};
+  fighters = picks.slice(); N = fighters.length; START = STARTS[N];
+  V = {f:START.map((x, i) => blankF(x, dir(i))), e:[], p:[]};
   D = mkD();
   parts = []; texts = []; banner = null; held.b = held.f = held.u = held.d = false; lastMv = 0; lastMz = 0; bgCur = -1;
   $('stage').style.setProperty('--c', F[fighters[me]].c); cam = (WW - 720)/2;
@@ -311,7 +340,7 @@ function cdShow(n){
 }
 
 /* ---------- host simulation (host phone decides everything) ---------- */
-const dir = i => i === 0 ? 1 : -1;      /* which way a fighter faces at the start of a round */
+const dir = i => START[i] < WW/2 ? 1 : START[i] > WW/2 ? -1 : 1;      /* which way a fighter faces at the start of a round */
 const r1 = v => Math.round(v*10)/10;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const later = (at, fn) => G.pend.push({at, fn});
@@ -322,11 +351,17 @@ const DMGX = .5;                        /* every attack's damage is multiplied b
 /* x = left/right, z = depth (0 far .. ZD close), y = height (only from being knocked up), fd = facing (+1 world-right / -1 world-left) */
 function mk(i){ return {x:START[i], y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0, fd:dir(i), hits:[], taken:[], need:4 + Math.floor(Math.random()*3), a:0, aUntil:0, stun:0, root:0,
                         ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, flyUntil:0, flyCd:0, hid:false}; }
+/* the nearest living opponent of fighter i (the one an ultimate or grab aims at) */
+function foe(i){
+  let b = -1, bd = 1e9;
+  for (let k = 0; k < G.f.length; k++){ if (k === i || G.f[k].hp <= 0) continue; const d = Math.abs(G.f[k].x - G.f[i].x); if (d < bd){ bd = d; b = k; } }
+  return b < 0 ? (i + 1) % G.f.length : b;
+}
 function beginFight(){
   const now = performance.now();
-  G = {f:[mk(0), mk(1)], e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps(); G.fly = null; G.beastAt = now + 19000 + Math.random()*7000;
+  G = {f:fighters.map((_, i) => mk(i)), e:[], p:[], pend:[], eid:0, over:false}; G.p = mkProps(); G.fly = null; G.beastAt = now + 19000 + Math.random()*7000;
   G.f.forEach(f => { f.spAt = now + 4000 + Math.random()*2000; f.ultAt = now + 7000; f.flyCd = now + 2500; });
-  [0,1].forEach(i => { if (fighters[i] === 2) spawnPandas(i); });
+  fighters.forEach((el, i) => { if (el === 2) spawnPandas(i); });
   lastT = now; clearInterval(tickId); tickId = setInterval(loop, 33);
 }
 
@@ -340,10 +375,10 @@ function spawnPandas(i){
 }
 function pandaRush(i, now){
   G.e.filter(e => e.k === 'panda' && e.o === i).forEach(p =>
-    later(now + 350 + p.n*320, () => { p.mode = 'atk'; p.done = false; }));
+    later(now + 350 + p.n*320, () => { p.mode = 'atk'; p.done = false; p.tg = foe(i); }));
 }
 function pandaTick(p, dt, now){
-  const f = G.f[p.o], en = G.f[1 - p.o];
+  const tgi = (p.tg !== undefined) ? p.tg : foe(p.o), f = G.f[p.o], en = G.f[tgi];
   let goal = null, sp = 0, gz = clamp(f.z + p.zo, 0, ZD), zs = 45;
   if (p.mode === 'atk'){
     if (en.hp <= 0) p.mode = 'ret';
@@ -352,7 +387,7 @@ function pandaTick(p, dt, now){
       if (Math.abs(en.x - p.x) < 52 && Math.abs(en.z - p.z) < 18){
         p.done = true; p.doneAt = now;
         const last = p.n === 3, dx = Math.sign(en.x - p.x) || p.fd;
-        damage(1 - p.o, last ? 10 : 5, last ? 460 : 130, last ? 650 : 260, last, last ? 430 : 0, dx);
+        damage(tgi, last ? 10 : 5, last ? 460 : 130, last ? 650 : 260, last, last ? 430 : 0, dx);
       }
     } else {
       gz = p.z;
@@ -382,26 +417,26 @@ function pandaTick(p, dt, now){
 }
 /* ---------- water fighter's ultimate: flood + unicorn + 4s electrocution ---------- */
 function waterUlt(i, now){
-  const f = G.f[i], d = f.fd, en = G.f[1 - i];
+  const tgi = foe(i), f = G.f[i], d = f.fd, en = G.f[tgi];
   G.e.push({id:++G.eid, k:'flood', o:i, x:360, y:0, z:0, age:0});
   const uni = {id:++G.eid, k:'uni', o:i, x:clamp(f.x - d*100, 70, WW-70), y:0, z:f.z, age:0, fd:d};
   later(now + 500, () => G.e.push(uni));
   later(now + 1300, () => {
     if (!G.e.includes(uni) || en.hp <= 0) return;
-    const bolt = {id:++G.eid, k:'bolt', o:i, x:uni.x, y:0, z:uni.z, age:0, fd:d, tx:en.x, ty:en.y, tz:en.z};
+    const bolt = {id:++G.eid, k:'bolt', o:i, x:uni.x, y:0, z:uni.z, age:0, fd:d, tx:en.x, ty:en.y, tz:en.z, tg:tgi};
     G.e.push(bolt);
     en.shock = performance.now() + 4000;
-    damage(1 - i, 4, 0, 4000, true);                       /* frozen in place for 4 seconds */
+    damage(tgi, 4, 0, 4000, true);                       /* frozen in place for 4 seconds */
     for (let n = 1; n <= 7; n++)
-      later(performance.now() + n*500, () => { if (G.e.includes(bolt) && en.hp > 0) damage(1 - i, 3, 0, 0, false); });
+      later(performance.now() + n*500, () => { if (G.e.includes(bolt) && en.hp > 0) damage(tgi, 3, 0, 0, false); });
   });
 }
 function ev(m){ m.t = 'ev'; send(m); handleEv(m); }
 
 /* dx = world direction the hit pushes the victim (+1 right / -1 left) */
 function damage(t, dmg, kb, stunMs, big, raise, dx){
-  const now = performance.now(), f = G.f[t], a = G.f[1-t];
-  if (f.hid) return;
+  const now = performance.now(), f = G.f[t], a = G.f[foe(t)];
+  if (f.hid || f.hp <= 0) return;
   dmg *= DMGX;
   if ((kb > 0 || stunMs > 0) && f.hold) dropHold(t);   /* a real hit makes you drop what you hold */
   const away = dx || Math.sign(f.x - a.x) || a.fd;
@@ -428,11 +463,12 @@ function loop(){
 
   for (const p of G.pend.slice()){ if (now >= p.at){ G.pend.splice(G.pend.indexOf(p),1); p.fn(); } }
 
-  const px0 = [G.f[0].x, G.f[1].x];
-  for (let i=0;i<2;i++){
+  const px0 = G.f.map(f => f.x);
+  for (let i=0;i<G.f.length;i++){
     const f = G.f[i], can = now >= f.stun, free = can && now >= f.root;
+    if (f.hp <= 0){ f.mv = 0; continue; }
     if (now > f.aUntil) f.a = 0;
-    const sx = f.mv * dir(i);                 /* world direction the player is pushing (their screen is mirrored for player 2) */
+    const sx = f.mv;                 /* world direction the player is pushing (their screen is mirrored for player 2) */
     if (free && sx) f.fd = sx;                /* walking turns the fighter to face that way */
     const vx = free ? sx * 190 : 0;
     f.x += (vx + f.kx) * dt; f.kx *= Math.pow(.02, dt);
@@ -442,26 +478,29 @@ function loop(){
     f.ch = clamp(100 - (f.ultAt - now)/70, 0, 100);   /* ultimate is ready again every 7 seconds */
   }
   /* keep fighters on the arena; they only bump when they share a lane, so you can walk around each other */
-  const [a,b] = G.f;
-  a.x = clamp(a.x, 34, WW-34); b.x = clamp(b.x, 34, WW-34);
-  { /* fighters can retreat far, but never further apart than the screen can show */
-    const gp = b.x - a.x;
-    if (Math.abs(gp) > MAXGAP){
-      const ex = Math.abs(gp) - MAXGAP, sg = gp >= 0 ? 1 : -1;
-      /* only the fighter who moved away is stopped at the cut line; the other one is never dragged */
-      const oa = Math.max(0, -sg*(a.x - px0[0])), ob = Math.max(0, sg*(b.x - px0[1]));
-      let wa, wb;
-      if (oa + ob > 0){ wa = oa/(oa + ob); wb = ob/(oa + ob); }
-      else { const kA = (now < a.stun || Math.abs(a.kx) > 60) ? 1 : 0, kB = (now < b.stun || Math.abs(b.kx) > 60) ? 1 : 0;
-             wa = (kA + kB === 1) ? kA : .5; wb = (kA + kB === 1) ? kB : .5; }
-      a.x = clamp(a.x + sg*ex*wa, 34, WW-34); b.x = clamp(b.x - sg*ex*wb, 34, WW-34);
-      if (wa > 0) a.kx = 0; if (wb > 0) b.kx = 0;
+  G.f.forEach(f => { f.x = clamp(f.x, 34, WW-34); });
+  const alv = G.f.filter(f => f.hp > 0);
+  if (alv.length > 1){ /* fighters can retreat far, but never further apart than the screen can show */
+    let lo = alv[0], hi = alv[0];
+    alv.forEach(f => { if (f.x < lo.x) lo = f; if (f.x > hi.x) hi = f; });
+    const span = hi.x - lo.x;
+    if (span > MAXGAP){
+      const il = G.f.indexOf(lo), ih = G.f.indexOf(hi), ex = span - MAXGAP;
+      const ol = Math.max(0, px0[il] - lo.x), oh = Math.max(0, hi.x - px0[ih]);
+      let wl = .5, wh = .5;
+      if (ol + oh > 0){ wl = ol/(ol + oh); wh = oh/(ol + oh); }
+      lo.x = clamp(lo.x + ex*wl, 34, WW-34); hi.x = clamp(hi.x - ex*wh, 34, WW-34);
+      if (wl > 0) lo.kx = 0; if (wh > 0) hi.kx = 0;
     }
   }
-  const gap = b.x - a.x;
-  if (!a.hold && !b.hold && Math.abs(gap) < 44 && Math.abs(a.z - b.z) < 16){
-    const push = (44 - Math.abs(gap))/2, sg = gap >= 0 ? 1 : -1;
-    a.x = clamp(a.x - sg*push, 34, WW-34); b.x = clamp(b.x + sg*push, 34, WW-34);
+  for (let p1 = 0; p1 < G.f.length; p1++) for (let p2 = p1 + 1; p2 < G.f.length; p2++){
+    const a = G.f[p1], b = G.f[p2];
+    if (a.hp <= 0 || b.hp <= 0 || a.hold || b.hold) continue;
+    const gap = b.x - a.x;
+    if (Math.abs(gap) < 44 && Math.abs(a.z - b.z) < 16){
+      const push = (44 - Math.abs(gap))/2, sg = gap >= 0 ? 1 : -1;
+      a.x = clamp(a.x - sg*push, 34, WW-34); b.x = clamp(b.x + sg*push, 34, WW-34);
+    }
   }
   holdTick(now); updProps(dt); flyTick(now);
 
@@ -472,33 +511,37 @@ function loop(){
     if (e.k === 'panda'){ pandaTick(e, dt, now); continue; }
     if (e.k === 'bike'){ bikeTick(e, dt, now); continue; }
     if (e.k === 'icem'){ if (e.age > 3400) rm(e); continue; }
-    if (e.k === 'bamboo'){ const tg = G.f[1 - e.o], hf = G.f[e.o]; e.x = hf.x; e.z = hf.z; e.y = hf.y; e.fd = hf.fd;
+    if (e.k === 'bamboo'){ const tg = G.f[e.tg], hf = G.f[e.o]; e.x = hf.x; e.z = hf.z; e.y = hf.y; e.fd = hf.fd;
       e.tx = tg.x; e.ty = tg.y; e.tz = tg.z; if (e.age > 3000 || tg.hp <= 0) rm(e); continue; }
     if (e.k === 'flood'){ if (e.age > 6000) rm(e); continue; }
     if (e.k === 'uni'){ if (e.age > 5400) rm(e); continue; }
-    if (e.k === 'bolt'){ const tg = G.f[1 - e.o]; e.tx = tg.x; e.ty = tg.y; e.tz = tg.z; if (e.age > 4000 || tg.hp <= 0) rm(e); continue; }
-    if (e.k === 'tank'){ const tg = G.f[1 - e.o]; e.z = clamp(e.z + clamp(tg.z - e.z, -70*dt, 70*dt), 0, ZD); continue; }
-    if (e.k === 'tree' && e.age < 450){ const tg = G.f[1-e.o]; e.x = tg.x + e.side*28; e.z = tg.z; }
+    if (e.k === 'bolt'){ const tg = G.f[e.tg]; e.tx = tg.x; e.ty = tg.y; e.tz = tg.z; if (e.age > 4000 || tg.hp <= 0) rm(e); continue; }
+    if (e.k === 'tank'){ const tg = G.f[e.tg]; e.z = clamp(e.z + clamp(tg.z - e.z, -70*dt, 70*dt), 0, ZD); continue; }
+    if (e.k === 'tree' && e.age < 450){ const tg = G.f[e.tg]; e.x = tg.x + e.side*28; e.z = tg.z; }
     if (!e.vx) continue;
     e.x += e.vx*dt;
-    if (e.hz){ const tg = G.f[1 - e.o]; e.z = clamp(e.z + clamp(tg.z - e.z, -e.hz*dt, e.hz*dt), 0, ZD); }
+    if (e.hz){ const tg = G.f[e.tg !== undefined ? e.tg : foe(e.o)]; e.z = clamp(e.z + clamp(tg.z - e.z, -e.hz*dt, e.hz*dt), 0, ZD); }
     if (e.x < -80 || e.x > WW + 80){ rm(e); continue; }
-    const t = 1 - e.o, f = G.f[t];
+    for (let t = 0; t < G.f.length; t++){ if (t === e.o || e.gone) continue; const f = G.f[t];
     if (!e.hit && f.hp > 0 && !f.hid && Math.abs(e.x - f.x) < e.r + 26 && Math.abs(e.y - (f.y + 62)) < e.r + 64 && Math.abs(e.z - f.z) < 14 + e.r*.6){
-      if (e.pierce) e.hit = true; else rm(e);
+      if (e.pierce) e.hit = true; else { rm(e); e.gone = true; }
       if (e.ev && Math.random()*100 < e.ev){ tx(f, 'Dodged!', '#9be7ff'); continue; }
       damage(t, e.dmg, e.kb, e.st, e.big || e.r >= 30, e.raise, Math.sign(e.vx));
       if (e.k === 'boulder') clearTrees(e.o);
     }
+    }
   }
 
   send(snapshot());
-  if (G.f[0].hp <= 0 || G.f[1].hp <= 0){
+  const alive = G.f.map((f, i) => i).filter(i => G.f[i].hp > 0);
+  if (alive.length <= 1){
     G.over = true; clearInterval(tickId);
-    const w = (G.f[0].hp <= 0 && G.f[1].hp <= 0) ? -1 : (G.f[0].hp <= 0 ? 1 : 0);
-    if (w === -1){ score[0]++; score[1]++; } else score[w]++;
-    if (score[0] >= WINS || score[1] >= WINS){            /* duel decided */
-      const fw = score[0] === score[1] ? -1 : (score[0] > score[1] ? 0 : 1);
+    const w = alive.length === 1 ? alive[0] : -1;
+    if (w === -1) score = score.map(s => s + 1); else score[w]++;
+    const top = Math.max(...score);
+    if (top >= WINS){                                     /* duel decided */
+      const lead = score.map((s, i) => i).filter(i => score[i] === top);
+      const fw = lead.length === 1 ? lead[0] : -1;
       send({t:'end', w:fw, score}); onEnd(fw);
     } else {                                              /* next round, same fighters */
       round++;
@@ -512,7 +555,7 @@ function snapshot(){
   V = {t:'s', bg:Math.floor(bgT / BG_SECONDS) % 3,
     f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:now >= f.spAt, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, hd:f.hold ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid})),
     e: G.e.map(e => ({id:e.id, k:e.k, o:e.o, x:r1(e.x), y:r1(e.y), z:r1(e.z || 0), r:e.r||0, a:Math.round(e.age),
-                      w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)})),
+                      w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', g:e.tg || 0, tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)})),
     p: G.p.map(p => ({id:p.id, k:p.k, x:r1(p.x), y:r1(p.y), z:r1(p.z), h:p.h, fl:p.fl ? 1 : 0, fd:p.fd}))};
   return V;
 }
@@ -520,10 +563,10 @@ function snapshot(){
 /* d = direction the shot flies (defaults to where the fighter faces right now) */
 function proj(i, o, d){
   const f = G.f[i]; if (d === undefined) d = f.fd;
-  const e = Object.assign({id:++G.eid, o:i, x:f.x + d*40, z:f.z, fd:d, age:0}, o);
+  const e = Object.assign({id:++G.eid, o:i, x:f.x + d*40, z:f.z, fd:d, age:0, tg:foe(i)}, o);
   e.y = (o.y || 40) + f.y; e.vx = d * o.v; G.e.push(e); return e;
 }
-function clearTrees(o){ G.e = G.e.filter(x => !(x.k === 'tree' && x.o === o)); G.f[1-o].root = 0; }
+function clearTrees(o){ G.e.filter(x => x.k === 'tree' && x.o === o).forEach(x => { G.f[x.tg].root = 0; }); G.e = G.e.filter(x => !(x.k === 'tree' && x.o === o)); }
 
 function doMelee(i){
   const now = performance.now(), f = G.f[i];
@@ -535,11 +578,13 @@ function doMelee(i){
   f.lastKind = kick ? 2 : 1; f.lastP = now;
   f.a = kick ? 2 : 1; f.aUntil = now + (kick ? 320 : 240); f.cdUntil = now + (kick ? 420 : 260);
   later(now + 110, () => {
-    const o = G.f[1-i];
     if (performance.now() < f.stun) return;
-    const front = (o.x - f.x) * fd;                     /* only hits what the fighter is facing, in the same lane */
-    if (front > -12 && front < 92 && Math.abs(o.z - f.z) < 18 && Math.abs(o.y - f.y) < 55)
-      damage(1-i, kick ? 10 : 6, kick ? 200 : 90, kick ? 380 : 230, kick, 0, fd);
+    G.f.forEach((o, t) => {
+      if (t === i || o.hp <= 0) return;
+      const front = (o.x - f.x) * fd;                   /* only hits what the fighter is facing, in the same lane */
+      if (front > -12 && front < 92 && Math.abs(o.z - f.z) < 18 && Math.abs(o.y - f.y) < 55)
+        damage(t, kick ? 10 : 6, kick ? 200 : 90, kick ? 380 : 230, kick, 0, fd);
+    });
   });
 }
 function doSpecial(i){
@@ -551,7 +596,7 @@ function doSpecial(i){
   later(now + 150, () => proj(i, SP[fighters[i]], d));
 }
 function doUlt(i){
-  const now = performance.now(), f = G.f[i], d = f.fd, o = G.f[1-i];
+  const now = performance.now(), f = G.f[i], d = f.fd, tgi = foe(i), o = G.f[tgi];
   if (now < f.stun || now < f.ultAt || f.hold) return;
   f.ultAt = now + 7000; f.ch = 0; f.a = 4; f.aUntil = now + 700;
   ev({k:'ult', i});
@@ -561,7 +606,7 @@ function doUlt(i){
   } else if (el === 2){ /* wind: the 4 pandas rush the enemy */
     pandaRush(i, now);
   } else if (el === 1){ /* fire: tank */
-    const tk = {id:++G.eid, k:'tank', o:i, x:clamp(f.x - d*90, 40, WW-40), y:0, z:f.z, fd:d, age:0};
+    const tk = {id:++G.eid, k:'tank', o:i, tg:tgi, x:clamp(f.x - d*90, 40, WW-40), y:0, z:f.z, fd:d, age:0};
     G.e.push(tk);
     const shell = big => { if (!G.e.includes(tk)) return;
       const e = proj(i, {k:'fb', v:big?460:420, y:50, r:big?30:14, dmg:big?20:7, kb:big?720:150, st:big?700:250, big}, d);
@@ -572,10 +617,10 @@ function doUlt(i){
   } else if (el === 4){ bikeUlt(i, now);
   } else if (el === 5){ iceUlt(i, now);
   } else {              /* soil: trees grab, boulder follows */
-    [-1,1].forEach(side => G.e.push({id:++G.eid, k:'tree', o:i, side, x:o.x + side*28, y:0, z:o.z, age:0}));
+    [-1,1].forEach(side => G.e.push({id:++G.eid, k:'tree', o:i, tg:tgi, side, x:o.x + side*28, y:0, z:o.z, age:0}));
     later(now + 450, () => { o.root = performance.now() + 3000; });
     [900,1400,1900].forEach(t => later(now + t, () => {
-      if (G.e.some(x => x.k === 'tree' && x.o === i)) damage(1-i, 3, 0, 0, false); }));
+      if (G.e.some(x => x.k === 'tree' && x.o === i)) damage(tgi, 3, 0, 0, false); }));
     later(now + 1200, () => proj(i, {k:'boulder', v:480, y:60, r:34, dmg:26, kb:520, st:700, big:true, hz:150}, Math.sign(o.x - f.x) || d));
     later(now + 3000, () => clearTrees(i));
   }
@@ -594,7 +639,7 @@ function dropHold(i){
   const f = G.f[i], h = f.hold; if (!h) return;
   f.hold = null; f.grabAt = performance.now() + 500;
   if (h.p){ h.p.h = -1; h.p.vx = 0; h.p.vy = 0; h.p.fl = false; }
-  else { const o = G.f[1-i]; o.stun = Math.max(o.stun, performance.now() + 250); }
+  else { const o = G.f[h.t]; o.stun = Math.max(o.stun, performance.now() + 250); }
 }
 function throwHold(i){
   const now = performance.now(), f = G.f[i], d = f.fd, h = f.hold;
@@ -604,12 +649,12 @@ function throwHold(i){
     p.h = -1; p.o = i; p.hit = false; p.fl = true; p.fd = d;
     p.x = f.x + d*30; p.z = clamp(f.z, 0, ZD); p.y = f.y + 84; p.vx = d*c.v; p.vy = 120;
   } else {
-    damage(1-i, 24, 760, 1000, true, 400, d);
+    damage(h.t, 24, 760, 1000, true, 400, d);
     tx(f, 'Thrown!', '#ffd166');
   }
 }
 function doGrab(i){
-  const now = performance.now(), f = G.f[i], o = G.f[1-i], d = f.fd;
+  const now = performance.now(), f = G.f[i], o = G.f[foe(i)], d = f.fd;
   if (f.hold){ throwHold(i); return; }                       /* press again: throw */
   if (now < f.stun || now < f.grabAt) return;
   f.grabAt = now + 450; f.a = 3; f.aUntil = now + 250;
@@ -624,16 +669,16 @@ function doGrab(i){
   const pd = nearP ? Math.abs(fr - 24) + Math.abs(o.z - f.z) : 1e9;
   if (best && bd <= pd){ best.h = i; best.o = i; best.vx = 0; best.vy = 0; f.hold = {p:best}; tx(f, 'Got it!', '#ffd166'); return; }
   if (nearP){
-    if (Math.random() < .3){ f.hold = {p:null, until:now + 3500}; tx(f, 'Grabbed!', '#ffd166'); }   /* 30% to grab a player */
+    if (Math.random() < .3){ f.hold = {p:null, until:now + 3500, t:foe(i)}; tx(f, 'Grabbed!', '#ffd166'); }   /* 30% to grab a player */
     else { f.grabAt = now + 900; tx(f, 'Missed!', '#ff8a8a'); }
   }
 }
 function holdTick(now){
-  for (let i = 0; i < 2; i++){
+  for (let i = 0; i < G.f.length; i++){
     const f = G.f[i], h = f.hold; if (!h) continue;
     f.a = 4; f.aUntil = now + 120;                           /* arms up while carrying */
     if (h.p) continue;
-    const o = G.f[1-i];
+    const o = G.f[h.t];
     if (now > h.until || o.hp <= 0){ dropHold(i); continue; }
     o.x = f.x + f.fd*10; o.z = Math.min(ZD, f.z + .3); o.y = f.y + 92;
     o.vy = 0; o.kx = 0; o.stun = Math.max(o.stun, now + 150); o.a = 0;
@@ -646,10 +691,11 @@ function updProps(dt){
     if (!p.fl && p.y <= 0) continue;
     p.x += p.vx*dt; p.vy -= 1500*dt; p.y += p.vy*dt;
     if (p.fl && !p.hit){
-      const t = 1 - p.o, ft = G.f[t], c = PR[p.k];
+      const c = PR[p.k]; for (let t = 0; t < G.f.length && !p.hit; t++){ const ft = G.f[t]; if (t === p.o) continue;
       if (ft.hp > 0 && Math.abs(p.x - ft.x) < 38 && Math.abs(p.z - ft.z) < 20 && p.y < ft.y + 100 && p.y + PHT[p.k]*.8 > ft.y){
         p.hit = true; const dx = Math.sign(p.vx) || p.fd; p.vx *= -.25;
         damage(t, c.dmg, c.kb, c.st, !!c.big, 0, dx);
+      }
       }
     }
     if (p.y <= 0){ p.y = 0; p.vy = 0; p.vx = 0; p.fl = false; p.hit = false; }
@@ -660,13 +706,13 @@ function updProps(dt){
 /* ---------- wild beast: every 19-26 s an elephant / yeti / gorilla carries one fighter around for 7 s, then hurls it at the other ---------- */
 const nextBeast = now => now + 19000 + Math.random()*7000;
 function spawnBeast(now){
-  const vi = Math.random() < .5 ? 0 : 1, v = G.f[vi], side = Math.random() < .5 ? -1 : 1, kind = Math.floor(Math.random()*3);
+  const alv = G.f.map((f, i) => i).filter(i => G.f[i].hp > 0), vi = alv[Math.floor(Math.random()*alv.length)] || 0, v = G.f[vi], side = Math.random() < .5 ? -1 : 1, kind = Math.floor(Math.random()*3);
   G.e.push({id:++G.eid, k:'beast', o:vi, vi, r:kind, x:clamp(v.x + side*460, -90, WW + 90), y:0, z:v.z, age:0, fd:-side,
             mode:'in', walk:true, wt:0, tx:0, tz:0, until:0});
   ev({k:'beast', n:kind});
 }
 function beastTick(b, dt, now){
-  const v = G.f[b.vi], o = G.f[1 - b.vi];
+  const v = G.f[b.vi]; if (b.to === undefined || G.f[b.to].hp <= 0) b.to = foe(b.vi); const o = G.f[b.to];
   let goal = null, sp = 0, gz = b.z, zs = 80;
   if (b.mode === 'in'){
     if (v.hp <= 0) b.mode = 'out';
@@ -674,7 +720,7 @@ function beastTick(b, dt, now){
       goal = v.x; sp = 300; gz = v.z; zs = 160;
       if (Math.abs(v.x - b.x) < 70 && Math.abs(v.z - b.z) < 14){          /* got you */
         if (v.hold) dropHold(b.vi);
-        if (o.hold && !o.hold.p) dropHold(1 - b.vi);
+        G.f.forEach((ff, k) => { if (k !== b.vi && ff.hold && !ff.hold.p && ff.hold.t === b.vi) dropHold(k); });
         b.mode = 'carry'; b.until = now + 7000; b.wt = 0; b.tx = b.x; b.tz = b.z;
         tx(v, 'Grabbed by a ' + BEASTS[b.r] + '!', '#ff8a8a');
       }
@@ -695,7 +741,7 @@ function beastTick(b, dt, now){
         b.fd = d; b.mode = 'out';
         damage(b.vi, 10, 0, 1300, true, 520, d);
         v.kx = clamp(dist, -640, 640)*3.91; v.z = o.z;
-        G.fly = {v:b.vi, until:now + 1300, hit:false};
+        G.fly = {v:b.vi, to:b.to, until:now + 1300, hit:false};
         tx(v, 'Hurled!', '#ffd166');
       }
     }
@@ -711,22 +757,22 @@ function beastTick(b, dt, now){
 }
 function flyTick(now){
   const fl = G.fly; if (!fl) return;
-  const v = G.f[fl.v], o = G.f[1 - fl.v];
+  const v = G.f[fl.v], o = G.f[fl.to];
   if (now > fl.until){ G.fly = null; return; }
   if (!fl.hit && o.hp > 0 && Math.abs(v.x - o.x) < 46 && Math.abs(v.z - o.z) < 20 && Math.abs(v.y - o.y) < 80){
-    fl.hit = true; damage(1 - fl.v, 24, 520, 900, true, 0, Math.sign(o.x - v.x) || 1);
+    fl.hit = true; damage(fl.to, 24, 520, 900, true, 0, Math.sign(o.x - v.x) || 1);
     tx(o, 'Bowled over!', '#ffd166');
   }
 }
 /* ---------- Sickle woman ultimate: rides a flaming bike through the enemy, left to right, then back ---------- */
 function bikeUlt(i, now){
-  const f = G.f[i], en = G.f[1 - i], sx = en.x - 430;
+  const tgi = foe(i), f = G.f[i], en = G.f[tgi], sx = en.x - 430;
   f.hid = true; f.root = now + 60000; f.mv = 0;
-  G.e.push({id:++G.eid, k:'bike', o:i, x:sx, y:0, z:en.z, age:0, fd:1, mode:'go', walk:true, sx, tx:sx + 860, h1:false, h2:false, wt:0});
+  G.e.push({id:++G.eid, k:'bike', o:i, x:sx, y:0, z:en.z, age:0, fd:1, mode:'go', walk:true, sx, tx:sx + 860, h1:false, h2:false, wt:0, tg:tgi});
 }
 function endBike(b){ const f = G.f[b.o]; f.hid = false; f.root = 0; rm(b); }
 function bikeTick(b, dt, now){
-  const en = G.f[1 - b.o];
+  const en = G.f[b.tg];
   if (en.hp <= 0){ endBike(b); return; }
   b.z = clamp(b.z + clamp(en.z - b.z, -140*dt, 140*dt), 0, ZD);
   const near = Math.abs(b.z - en.z) < 26 && en.y < 55;
@@ -734,7 +780,7 @@ function bikeTick(b, dt, now){
     b.fd = 1; b.x += 650*dt;
     if (!b.h1 && Math.abs(b.x - en.x) < 40 && near){
       b.h1 = true;
-      if (Math.random() < .05) tx(en, 'Dodged!', '#9be7ff'); else damage(1 - b.o, 12, 260, 450, false, 0, 1);
+      if (Math.random() < .05) tx(en, 'Dodged!', '#9be7ff'); else damage(b.tg, 12, 260, 450, false, 0, 1);
     }
     if (b.x >= b.tx){ b.mode = 'wait'; b.wt = now + 250; }
   } else if (b.mode === 'wait'){
@@ -743,7 +789,7 @@ function bikeTick(b, dt, now){
     b.x -= 650*dt;
     if (!b.h2 && Math.abs(b.x - en.x) < 40 && near){
       b.h2 = true;
-      if (Math.random() < .05) tx(en, 'Dodged!', '#9be7ff'); else damage(1 - b.o, 20, 2300, 1100, true, 450, -1);
+      if (Math.random() < .05) tx(en, 'Dodged!', '#9be7ff'); else damage(b.tg, 20, 2300, 1100, true, 450, -1);
     }
     if (b.x <= b.sx) endBike(b);
   }
@@ -758,7 +804,7 @@ function doFly(i){
   tx(f, 'Flying!', '#9be7ff');
 }
 function iceUlt(i, now){
-  const f = G.f[i], en = G.f[1 - i], d = f.fd;
+  const tgi = foe(i), f = G.f[i], en = G.f[tgi], d = f.fd;
   const m = {id:++G.eid, k:'icem', o:i, x:en.x, y:0, z:en.z, age:0};
   later(now + 250, () => {
     if (en.hp <= 0) return;
@@ -766,16 +812,16 @@ function iceUlt(i, now){
     en.stun = Math.max(en.stun, performance.now() + 3000); en.kx = 0; en.a = 0; en.flyUntil = 0;
     tx(en, 'Frozen!', '#9be7ff');
   });
-  const bam = {id:++G.eid, k:'bamboo', o:i, x:f.x, y:0, z:f.z, age:0, fd:d, tx:en.x, ty:0, tz:en.z};
+  const bam = {id:++G.eid, k:'bamboo', o:i, x:f.x, y:0, z:f.z, age:0, fd:d, tx:en.x, ty:0, tz:en.z, tg:tgi};
   later(now + 700, () => G.e.push(bam));
   [1900, 2300, 2700].forEach((t, n) => later(now + t, () => {
-    if (G.e.includes(bam) && en.hp > 0) damage(1 - i, n === 2 ? 18 : 10, 0, 0, n === 2, 0, Math.sign(en.x - f.x) || d);
+    if (G.e.includes(bam) && en.hp > 0) damage(tgi, n === 2 ? 18 : 10, 0, 0, n === 2, 0, Math.sign(en.x - f.x) || d);
   }));
 }
 function applyInput(i, k, d){
   if (!G || G.over) return;
   const f = G.f[i];
-  if (f.hid) return;
+  if (f.hid || f.hp <= 0) return;
   if (k === 'mv') f.mv = Math.sign(d) || 0;
   else if (k === 'mz') f.mz = Math.sign(d) || 0;
   else if (k === 'p') doMelee(i);
@@ -822,7 +868,7 @@ function onEnd(w){
     if (phase !== 'over') return;
     $('otitle').textContent = w === -1 ? 'Draw' : w === me ? 'You win!' : 'You lose';
     $('osub').textContent = (w === -1 ? 'Dead even: both fighters fell together.' :
-      `${F[fighters[w]].name} ${w === me ? 'stands victorious' : 'takes the duel'}.`) + `  Rounds ${score[me]}–${score[1-me]}`;
+      `${F[fighters[w]].name} ${w === me ? 'stands victorious' : 'takes the duel'}.`) + `  Rounds ${[score[me]].concat(score.filter((_, i) => i !== me)).join('–')}`;
     $('over').classList.add('on');
   }, 800);
 }
@@ -858,6 +904,7 @@ addEventListener('keyup', e => { if (KEYS[e.key]){ held[KEYS[e.key]] = false; up
 
 $('create').onclick = () => create();
 $('joinbtn').onclick = () => join($('codein').value);
+$('startbtn').onclick = () => startDuel();
 $('rematch').onclick = () => { if (isHost) resetSelect(); else send({t:'rematch'}); };
 $('copy').onclick = async () => {
   const url = location.origin + location.pathname + '?join=' + $('code').textContent;
@@ -1192,9 +1239,9 @@ function figure(x, y, k, dir, p, t, sc){
 
 function drawFighter(i, now){
   const s = V.f[i], d = D.f[i], px = X(d.x), sc = ps(d.z), gy = ZF + d.z;
-  if (s.hi) return;
+  if (s.hi || s.hp <= 0) return;
   ctx.fillStyle = '#00000066'; ctx.beginPath(); ctx.ellipse(px, gy + 3, Math.max(6, 34 - d.y*.12)*sc, 7*sc, 0, 0, 7); ctx.fill();
-  const sd = (me === 0 ? s.fd : -s.fd) || 1;             /* facing, as seen on this phone */
+  const sd = (1 ? s.fd : -s.fd) || 1;             /* facing, as seen on this phone */
   const moving = Math.abs(d.x - d.lx) > .4 || Math.abs(d.z - d.lz) > .3;
   figure(px + (s.sh ? (Math.random() - .5)*5 : 0), gy - d.y - 52*sc, fighters[i], sd,
     {a:s.a, air:d.y > 6, mv:moving, s:s.s, tilt:Math.max(0, (tiltT[i] - now)/450), flash:s.s && Math.floor(now/70)%2 === 0}, now, sc);
@@ -1213,7 +1260,7 @@ function drawFighter(i, now){
 
 function drawEnt(e, d, t){
   const z = d.z || 0, s = ps(z), gy = ZF + z, x = X(d.x), y = gy - d.y*s;
-  const ds = (me === 0 ? e.fd : -e.fd) || (e.o === me ? 1 : -1);   /* direction it faces / flies on this screen */
+  const ds = (1 ? e.fd : -e.fd) || (e.o === me ? 1 : -1);   /* direction it faces / flies on this screen */
   ctx.save();
   switch (e.k){
     case 'wj':
@@ -1261,9 +1308,9 @@ function drawEnt(e, d, t){
       break; }
     case 'uni':
       ctx.translate(x, gy); ctx.scale(s, s);
-      drawUnicorn(ctx, 0, 0, (me === 0 ? e.fd : -e.fd) || 1, e.a, t); break;
+      drawUnicorn(ctx, 0, 0, (1 ? e.fd : -e.fd) || 1, e.a, t); break;
     case 'bolt': {
-      const sdir = (me === 0 ? e.fd : -e.fd) || 1;
+      const sdir = (1 ? e.fd : -e.fd) || 1;
       const sx = x + sdir*64*s, sy = gy - 120*s, ex = X(e.tx), ey = ZF + e.tz - e.ty - 58*ps(e.tz);
       const rnd = n => { const v = Math.sin(n*12.9898 + Math.floor(t/45)*78.233)*43758.5453; return v - Math.floor(v); };
       const N = 14, pts = [[sx, sy]];
@@ -1286,7 +1333,7 @@ function drawEnt(e, d, t){
       drawBeast(ctx, e.r, 0, 0, ds, e.w, t, e.m === 'carry'); break;
     case 'panda':
       ctx.translate(x, gy); ctx.scale(s, s);
-      drawPanda(ctx, 0, 0, (me === 0 ? e.fd : -e.fd) || 1, e.w, e.m === 'atk', t, e.id); break;
+      drawPanda(ctx, 0, 0, (1 ? e.fd : -e.fd) || 1, e.w, e.m === 'atk', t, e.id); break;
     case 'sickle':
       for (let k=4;k>=1;k--){ ctx.globalAlpha = .5 - k*.1; ctx.fillStyle = '#ff6a3d'; disc(x - ds*k*14, y + Math.sin(t/60 + k)*3, 9 - k*1.4); }
       ctx.globalAlpha = 1; ctx.translate(x, y); ctx.rotate(t/55*ds);
@@ -1301,7 +1348,7 @@ function drawEnt(e, d, t){
       ctx.globalAlpha = 1; ctx.shadowColor = '#3aa8ff'; ctx.shadowBlur = 18; ctx.fillStyle = '#3a8dff'; disc(x, y, r);
       ctx.shadowBlur = 0; ctx.fillStyle = '#bfe9ff'; disc(x, y, r*.55); break; }
     case 'bike': {
-      const bd = (me === 0 ? e.fd : -e.fd) || 1;
+      const bd = (1 ? e.fd : -e.fd) || 1;
       ctx.translate(x, gy); ctx.scale(s, s);
       for (let k=1;k<=6;k++){ ctx.globalAlpha = .55 - k*.07; ctx.fillStyle = k % 2 ? '#ff6a3d' : '#ffd166'; disc(-bd*(30 + k*16), -12 + Math.sin(t/50 + k)*4, 11 - k*1.2); }
       ctx.globalAlpha = 1; ctx.scale(bd, 1); ctx.lineCap = 'round';
@@ -1328,7 +1375,7 @@ function drawEnt(e, d, t){
       }
       break; }
     case 'bamboo': {
-      const sd = (me === 0 ? e.fd : -e.fd) || 1;
+      const sd = (1 ? e.fd : -e.fd) || 1;
       const x0 = x + sd*30*s, y0 = gy - e.y - 80*s, x1 = X(e.tx), y1 = ZF + e.tz - e.ty - 58*ps(e.tz);
       const gk = Math.min(1, e.a/1100) * (e.a > 2400 ? Math.max(0, (3000 - e.a)/600) : 1);
       const st = ((e.a > 1150 && e.a < 1260) || (e.a > 1550 && e.a < 1660) || (e.a > 1950 && e.a < 2060)) ? 14 : 0;
@@ -1355,7 +1402,7 @@ function drawEnt(e, d, t){
       if (e.a > 600 && (e.a % 400) < 90){ ctx.fillStyle = '#ffd166'; disc(ds*62,-46,10); }
       break; }
     case 'tree': {
-      const g = Math.min(1, e.a/400), tx = X(D.f[1-e.o].x), bd = Math.sign(tx - x) || 1;
+      const g = Math.min(1, e.a/400), tx = X(D.f[e.g || 0].x), bd = Math.sign(tx - x) || 1;
       ctx.translate(x, gy); ctx.scale(s, s);
       ctx.fillStyle = '#6b4423'; ctx.fillRect(-8, -120*g, 16, 120*g);
       ctx.strokeStyle = '#6b4423'; ctx.lineWidth = 6; ctx.lineCap = 'round';
@@ -1478,7 +1525,7 @@ function drawProp(p, d, t){
     ctx.ellipse(x, gy + 3, PWD[p.k]*sc*(1 - Math.min(.5, d.y/300)), 6*sc, 0, 0, 7); ctx.fill();
   }
   ctx.save(); ctx.translate(x, gy - d.y*s); ctx.scale(sc, sc);
-  if (p.fl){ const H = PHT[p.k]; ctx.translate(0, -H/2); ctx.rotate(t/110 * ((me === 0 ? p.fd : -p.fd) || 1)); ctx.translate(0, H/2); }
+  if (p.fl){ const H = PHT[p.k]; ctx.translate(0, -H/2); ctx.rotate(t/110 * ((1 ? p.fd : -p.fd) || 1)); ctx.translate(0, H/2); }
   PD[p.k](ctx, t);
   ctx.restore();
 }
@@ -1489,10 +1536,11 @@ function bar(x, y, w, h, v, col){
   if (ww > 1){ ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(x,y,ww,h,h/2); ctx.fill(); }
 }
 function hud(i){
-  const f = F[fighters[i]], x = i === me ? 20 : 390, w = 310, s = V.f[i];
-  ctx.textAlign = 'left'; ctx.fillStyle = '#f3ecdd'; ctx.font = FONT(16);
-  ctx.fillText((i === me ? 'You' : 'Opponent') + ' · ' + f.name, x, 24);
-  for (let k = 0; k < WINS; k++){ ctx.fillStyle = k < score[i] ? '#ffd166' : '#ffffff26'; disc(x + w/2 + 14 + k*16, 17, 5); }   /* rounds won */
+  const f = F[fighters[i]], n = V.f.length, w = n === 3 ? 222 : 310, x = n === 3 ? 10 + i*238 : (i === 0 ? 20 : 390), s = V.f[i];
+  ctx.textAlign = 'left'; ctx.fillStyle = '#f3ecdd'; ctx.font = FONT(n === 3 ? 14 : 16);
+  ctx.fillText((i === me ? 'You' : 'P' + (i + 1)) + ' · ' + f.name, x, 24);
+  const dx = n === 3 ? w - 64 : w/2 + 14;
+  for (let k = 0; k < WINS; k++){ ctx.fillStyle = k < score[i] ? '#ffd166' : '#ffffff26'; disc(x + dx + k*16, 17, 5); }   /* rounds won */
   ctx.textAlign = 'right'; ctx.fillStyle = '#a59fc0'; ctx.font = FONT(14);
   ctx.fillText(Math.ceil(s.hp), x + w, 24);
   bar(x, 31, w, 12, D.f[i].hp, D.f[i].hp > 30 ? '#6fdc8c' : '#ff5b6e');
@@ -1680,7 +1728,7 @@ function drawArena(now){
   ctx.fillStyle = '#ffffff0f'; ctx.fillRect(-20, ZF - 7, 760, ZD + 16);   /* the walkable lane band */
   ctx.fillStyle = '#ffffff26'; ctx.fillRect(-20, ZF - 7, 760, 2); ctx.fillRect(-20, GYN + 9, 760, 2);
   /* the cut line: appears in the middle of the screen when the fighters get too far apart */
-  const gapNow = Math.abs(D.f[1].x - D.f[0].x), near = clamp((gapNow - (MAXGAP - 140))/140, 0, 1), lx = X((D.f[0].x + D.f[1].x)/2);
+  const alv = D.f.filter((d, i) => V.f[i] && V.f[i].hp > 0), axs = (alv.length ? alv : D.f).map(d => d.x), gapNow = Math.max(...axs) - Math.min(...axs), near = clamp((gapNow - (MAXGAP - 140))/140, 0, 1), lx = X((Math.max(...axs) + Math.min(...axs))/2);
   if (near > 0){
     ctx.save(); ctx.globalAlpha = near*(near >= 1 ? .8 + .2*Math.sin(now/90) : 1); ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 10;
     const lg = ctx.createLinearGradient(0, 56, 0, 360); lg.addColorStop(0, '#ffffff00'); lg.addColorStop(.35, '#ffffffcc'); lg.addColorStop(1, '#ffffffcc');
@@ -1690,10 +1738,10 @@ function drawArena(now){
 
 function draw(){
   requestAnimationFrame(draw);
-  if (fighters[0] === null || fighters[1] === null || !$('fight').classList.contains('on')) return;
+  if (fighters.some(f => f === null) || !$('fight').classList.contains('on')) return;
   const now = performance.now();
 
-  for (let i=0;i<2;i++){ const t = V.f[i], d = D.f[i];
+  for (let i=0;i<D.f.length;i++){ const t = V.f[i], d = D.f[i]; if (!t) continue;
     d.lx = d.x; d.lz = d.z; d.x += (t.x - d.x)*.45; d.y += (t.y - d.y)*.5; d.z += (t.z - d.z)*.5; d.hp += (t.hp - d.hp)*.18; }
   const live = {};
   for (const e of V.e){ let d = D.e[e.id]; if (!d) d = D.e[e.id] = {x:e.x, y:e.y, z:e.z};
@@ -1703,7 +1751,7 @@ function draw(){
   for (const p of V.p || []){ let d = D.p[p.id]; if (!d) d = D.p[p.id] = {x:p.x, y:p.y, z:p.z};
     d.x += (p.x - d.x)*.5; d.y += (p.y - d.y)*.5; d.z += (p.z - d.z)*.5; liveP[p.id] = 1; }
   for (const id in D.p) if (!liveP[id]) delete D.p[id];
-  { const mx = (D.f[0].x + D.f[1].x)/2, vm = me === 0 ? mx : WW - mx;     /* camera follows the middle of the two fighters */
+  { const al = D.f.filter((d, i) => V.f[i] && V.f[i].hp > 0), xs = (al.length ? al : D.f).map(d => d.x), mx = (Math.min(...xs) + Math.max(...xs))/2, vm = mx;     /* camera follows the middle of the two fighters */
     cam += (Math.max(0, Math.min(WW - 720, vm - 360)) - cam)*.2; }
 
   ctx.save(); ctx.clearRect(0,0,720,360);
@@ -1713,7 +1761,7 @@ function draw(){
 
   /* everything standing on the floor is drawn far-to-near so closer fighters cover farther ones */
   const isBack = e => e.k === 'tank' || e.k === 'tree' || e.k === 'uni' || e.k === 'icem' || (e.k === 'panda' && e.m !== 'atk');
-  const items = [{z:D.f[0].z, f:0}, {z:D.f[1].z, f:1}];
+  const items = D.f.map((d, i) => ({z:d.z, f:i}));
   for (const e of V.e){
     const d = D.e[e.id];
     items.push({z: (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
@@ -1734,7 +1782,7 @@ function draw(){
   for (const t of texts){ const k = (now - t.t0)/900; ctx.globalAlpha = 1 - k; ctx.fillStyle = t.c; ctx.fillText(t.s, t.x, t.y - k*34); }
   ctx.globalAlpha = 1;
 
-  hud(me); hud(1 - me);
+  hud(me); V.f.forEach((_, k) => { if (k !== me) hud(k); });
   if (banner && now - banner.t0 < (banner.dur || 1500)){
     const k = (now - banner.t0)/(banner.dur || 1500);
     ctx.globalAlpha = k < .7 ? 1 : 1 - (k-.7)/.3; ctx.fillStyle = banner.c; ctx.font = FONT(38); ctx.textAlign = 'center';
