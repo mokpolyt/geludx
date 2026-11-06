@@ -420,6 +420,7 @@ function loop(){
 
   for (const p of G.pend.slice()){ if (now >= p.at){ G.pend.splice(G.pend.indexOf(p),1); p.fn(); } }
 
+  const px0 = [G.f[0].x, G.f[1].x];
   for (let i=0;i<2;i++){
     const f = G.f[i], can = now >= f.stun, free = can && now >= f.root;
     if (now > f.aUntil) f.a = 0;
@@ -438,9 +439,14 @@ function loop(){
     const gp = b.x - a.x;
     if (Math.abs(gp) > MAXGAP){
       const ex = Math.abs(gp) - MAXGAP, sg = gp >= 0 ? 1 : -1;
-      const kA = (now < a.stun || Math.abs(a.kx) > 60) ? 1 : 0, kB = (now < b.stun || Math.abs(b.kx) > 60) ? 1 : 0;
-      const wa = (kA + kB === 1) ? kA : .5, wb = (kA + kB === 1) ? kB : .5;
+      /* only the fighter who moved away is stopped at the cut line; the other one is never dragged */
+      const oa = Math.max(0, -sg*(a.x - px0[0])), ob = Math.max(0, sg*(b.x - px0[1]));
+      let wa, wb;
+      if (oa + ob > 0){ wa = oa/(oa + ob); wb = ob/(oa + ob); }
+      else { const kA = (now < a.stun || Math.abs(a.kx) > 60) ? 1 : 0, kB = (now < b.stun || Math.abs(b.kx) > 60) ? 1 : 0;
+             wa = (kA + kB === 1) ? kA : .5; wb = (kA + kB === 1) ? kB : .5; }
       a.x = clamp(a.x + sg*ex*wa, 34, WW-34); b.x = clamp(b.x - sg*ex*wb, 34, WW-34);
+      if (wa > 0) a.kx = 0; if (wb > 0) b.kx = 0;
     }
   }
   const gap = b.x - a.x;
@@ -1499,9 +1505,10 @@ function drawArena(now){
   }
   ctx.fillStyle = '#ffffff0f'; ctx.fillRect(-20, ZF - 7, 760, ZD + 16);   /* the walkable lane band */
   ctx.fillStyle = '#ffffff26'; ctx.fillRect(-20, ZF - 7, 760, 2); ctx.fillRect(-20, GYN + 9, 760, 2);
-  const lx = X(WW/2);                                                  /* the cut line in the middle of the arena */
-  if (lx > -6 && lx < 726){
-    ctx.save(); ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 10;
+  /* the cut line: appears in the middle of the screen when the fighters get too far apart */
+  const gapNow = Math.abs(D.f[1].x - D.f[0].x), near = clamp((gapNow - (MAXGAP - 140))/140, 0, 1), lx = X((D.f[0].x + D.f[1].x)/2);
+  if (near > 0){
+    ctx.save(); ctx.globalAlpha = near*(near >= 1 ? .8 + .2*Math.sin(now/90) : 1); ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 10;
     const lg = ctx.createLinearGradient(0, 56, 0, 360); lg.addColorStop(0, '#ffffff00'); lg.addColorStop(.35, '#ffffffcc'); lg.addColorStop(1, '#ffffffcc');
     ctx.strokeStyle = lg; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(lx, 56); ctx.lineTo(lx, 360); ctx.stroke(); ctx.restore();
   }
