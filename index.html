@@ -378,7 +378,7 @@ const DMGX = .5;                        /* every attack's damage is multiplied b
 
 /* x = left/right, z = depth (0 far .. ZD close), y = height (only from being knocked up), fd = facing (+1 world-right / -1 world-left) */
 function mk(i){ return {x:START[i], y:0, z:ZD/2, vy:0, kx:0, hp:100, mv:0, mz:0, fd:dir(i), hits:[], taken:[], need:4 + Math.floor(Math.random()*3), a:0, aUntil:0, stun:0, root:0,
-                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spN:0, spGap:0, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, burn:0, flyUntil:0, flyCd:0, hid:false, bm:false, wet:0, hb:0, un:0, gFrom:0, gUntil:0, gm:0, glow:0, wing:0}; }
+                        ch:0, ult:false, ultAt:0, grabAt:0, hold:null, spN:0, spGap:0, spAt:0, lastP:0, lastKind:0, cdUntil:0, shock:0, burn:0, flyUntil:0, flyCd:0, hid:false, bm:false, wet:0, hb:0, un:0, gFrom:0, gUntil:0, gm:0, glow:0, wing:0, dance:0, skel:0}; }
 /* the nearest living opponent of fighter i (the one an ultimate or grab aims at) */
 function foe(i){
   let b = -1, bd = 1e9;
@@ -549,6 +549,7 @@ function loop(){
     if (e.k === 'grope'){ gropeTick(e, dt, now); continue; }
     if (e.k === 'gdove'){ doveTick(e, dt, now); continue; }
     if (e.k === 'stick'){ stickTick(e, dt); continue; }
+    if (e.k === 'sdance'){ sdanceTick(e, dt, now); continue; }
     if (e.k === 'fcrack'){ if (e.age > 6000) rm(e); continue; }
     if (e.k === 'rlaser'){ const rf = G.f[e.o], rt = G.f[e.tg]; e.x = rf.x; e.z = rf.z; e.tx = rt.x; e.ty = rt.y; e.tz = rt.z;
       if (e.age > 4000 || rt.hp <= 0 || rf.hp <= 0) rm(e); continue; }
@@ -608,7 +609,7 @@ function loop(){
 function snapshot(){
   const now = performance.now();
   V = {t:'s', bg:Math.floor(bgT / BG_SECONDS) % 5,
-    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:f.spN > 0, sn:f.spN, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, nx:f.un % 2, bn:now < f.burn, wt:now < f.wet, hb:now < f.hb, rg:now < f.glow, wg:now < f.wing, hd:f.hold ? 1 : 0, bm:f.bm ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid, gs:r1(giantScale(f, now))})),
+    f: G.f.map(f => ({x:r1(f.x), y:r1(f.y), z:r1(f.z), fd:f.fd, hp:r1(f.hp), a:f.a, ch:Math.round(f.ch), sp:f.spN > 0, sn:f.spN, u:f.ult, s:now < f.stun, r:now < f.root, sh:now < f.shock, nx:f.un % 2, bn:now < f.burn, wt:now < f.wet, hb:now < f.hb, rg:now < f.glow, wg:now < f.wing, dn:now < f.dance, sk:now < f.skel, hd:f.hold ? 1 : 0, bm:f.bm ? 1 : 0, fy:now < f.flyUntil, fr:now >= f.flyCd, hi:f.hid, gs:r1(giantScale(f, now))})),
     e: G.e.map(e => ({id:e.id, k:e.k, o:e.o, x:r1(e.x), y:r1(e.y), z:r1(e.z || 0), r:e.r||0, a:Math.round(e.age),
                       w:e.walk ? 1 : 0, fd:e.fd || 0, m:e.mode || '', g:e.tg || 0, tx:r1(e.tx || 0), ty:r1(e.ty || 0), tz:r1(e.tz || 0)})),
     p: G.p.map(p => ({id:p.id, k:p.k, x:r1(p.x), y:r1(p.y), z:r1(p.z), h:p.h, fl:p.fl ? 1 : 0, fd:p.fd}))};
@@ -668,7 +669,7 @@ function doUlt(i){
   const now = performance.now(), f = G.f[i], d = f.fd, tgi = foe(i), o = G.f[tgi];
   if (now < f.stun || now < f.ultAt || f.hold) return;
   f.ultAt = now + 11000; f.ch = 0; f.a = 4; f.aUntil = now + 700;
-  const el = fighters[i], un = (el === 7 || el === 10) ? f.un++ % 2 : 0;       /* the flower fighter alternates: 1st hornet, 2nd petal storm */
+  const el = fighters[i], un = (el === 7 || el === 10 || el === 4) ? f.un++ % 2 : 0;       /* the flower fighter alternates: 1st hornet, 2nd petal storm */
   ev({k:'ult', i, u:un});
   if (el === 0){        /* water: flood the arena, unicorn electrocutes the enemy */
     waterUlt(i, now);
@@ -678,7 +679,7 @@ function doUlt(i){
     later(now + 5000, () => pandaRush(i, performance.now()));
   } else if (el === 1){ /* fire: lava pit */
     lavaUlt(i, now);
-  } else if (el === 4){ bikeUlt(i, now);
+  } else if (el === 4){ if (un) sickleDanceUlt(i, now); else bikeUlt(i, now);
   } else if (el === 5){ bambooUlt(i, now);
   } else if (el === 6){ mermaidUlt(i, now);
   } else if (el === 7){ if (un) petalUlt(i, now); else hornetUlt(i, now);
@@ -781,7 +782,7 @@ function updProps(dt){
 }
 
 /* ---------- wild beast: every 20-32 s an elephant / yeti / gorilla carries one fighter around for 7 s, then hurls it at the other ---------- */
-const nextBeast = now => now + 20000 + Math.random()*12000;   /* 20-32 s, randomized */
+const nextBeast = now => now + 30000 + Math.random()*14000;   /* one of the 3 beasts (elephant / yeti / gorilla, picked at random) every 30-44 s */
 function spawnBeast(now){
   const alv = G.f.map((f, i) => i).filter(i => G.f[i].hp > 0), vi = alv[Math.floor(Math.random()*alv.length)] || 0, v = G.f[vi], side = Math.random() < .5 ? -1 : 1, kind = Math.floor(Math.random()*3);
   G.e.push({id:++G.eid, k:'beast', o:vi, vi, r:kind, x:clamp(v.x + side*460, -90, WW + 90), y:0, z:v.z, age:0, fd:-side,
@@ -1195,6 +1196,35 @@ function rosUlt(i, now){
     for (let n = 1; n <= 10; n++) later(t0 + n*400, () => { if (en.hp > 0 && !en.hid) damage(tgi, 4, 0, 0, false); });
   });
 }
+/* ---------- Sickle woman ultimate #2: dances with the enemy for 3 s, blows fire on him for 2.8 s, he turns into a skeleton for 20 s ---------- */
+const DANCE_MS = 3000, BLOW_MS = 2800, SKEL_MS = 20000;
+function sickleDanceUlt(i, now){
+  const f = G.f[i], tgi = foe(i), en = G.f[tgi], d = Math.sign(en.x - f.x) || f.fd;
+  if (f.hold) dropHold(i);
+  if (en.hold) dropHold(tgi);
+  f.fd = d; f.root = now + DANCE_MS + BLOW_MS + 400; f.mv = 0; f.dance = now + DANCE_MS; en.dance = now + DANCE_MS;
+  en.stun = Math.max(en.stun, now + 400);
+  G.e.push({id:++G.eid, k:'sdance', o:i, tg:tgi, x:f.x, y:0, z:f.z, age:0, fd:d, mode:'dance', tx:en.x, ty:en.y, tz:en.z, fs:false});
+  tx(f, 'Dance with me!', '#ff7ac8');
+}
+function sdanceTick(e, dt, now){
+  const f = G.f[e.o], en = G.f[e.tg];
+  if (f.hp <= 0 || en.hp <= 0){ f.root = 0; f.dance = 0; en.dance = 0; rm(e); return; }
+  const d = e.fd, k = clamp(10*dt, 0, 1);
+  en.x += (clamp(f.x + d*70, 40, WW - 40) - en.x)*k; en.z += (f.z - en.z)*k; en.y += (0 - en.y)*k;      /* pulled in front of her and held */
+  en.vy = 0; en.kx = 0; en.a = 0; en.flyUntil = 0; en.stun = Math.max(en.stun, now + 150); en.fd = -d;
+  e.x = f.x; e.z = f.z; e.tx = en.x; e.ty = en.y; e.tz = en.z;
+  if (e.age >= DANCE_MS && !e.fs){                                   /* the music stops: she blows fire on him */
+    e.fs = true; e.mode = 'fire'; f.dance = 0; en.dance = 0;
+    ev({k:'snd', n:'fire'}); ev({k:'snd', n:'boom'});
+    en.burn = now + BLOW_MS;
+    for (let n = 1; n <= 7; n++) later(now + n*400, () => { if (en.hp > 0 && !en.hid) damage(e.tg, 3, 0, 0, false); });
+  }
+  if (e.age >= DANCE_MS + BLOW_MS){                                  /* nothing left but bones */
+    en.skel = now + SKEL_MS; en.burn = 0; en.stun = Math.min(en.stun, now); f.root = 0;
+    tx(en, 'Skeleton!', '#efe9d6'); rm(e);
+  }
+}
 function applyInput(i, k, d){
   if (!G || G.over) return;
   const f = G.f[i];
@@ -1234,7 +1264,7 @@ function handleEv(m){
   } else if (m.k === 'beast'){
     banner = {s:'A wild ' + BEASTS[m.n] + '!', c:'#ff8a8a', t0:now, dur:1800};
   } else if (m.k === 'ult'){
-    banner = {s:(fighters[m.i] === 7 && m.u) ? 'Petal Storm' : (fighters[m.i] === 10 && m.u) ? 'Feather Storm' : ULTN[fighters[m.i]], c:F[fighters[m.i]].c, t0:now};
+    banner = {s:(fighters[m.i] === 7 && m.u) ? 'Petal Storm' : (fighters[m.i] === 10 && m.u) ? 'Feather Storm' : (fighters[m.i] === 4 && m.u) ? 'Skeleton Dance' : ULTN[fighters[m.i]], c:F[fighters[m.i]].c, t0:now};
   }
 }
 function onRound(w){
@@ -1344,6 +1374,8 @@ const dk = (hex, f = .78) => { const n = parseInt(hex.slice(1), 16);
 
 const mixHex = (a, b, f) => { const x = parseInt(a.slice(1), 16), y = parseInt(b.slice(1), 16);
   return '#' + [16,8,0].map(q => Math.round(((x >> q) & 255)*(1 - f) + ((y >> q) & 255)*f).toString(16).padStart(2,'0')).join(''); };
+const SKELC = {};
+function skelC(k){ if (!SKELC[k]) SKELC[k] = Object.assign({}, CH[k], {skin:'#efe9d6', hair:'#d6cfba', hi:'#fffaf0', top:'#e6dfca', trim:'#d3cbb0', pants:'#dcd5bf', belt:'#c4bca2', shoe:'#ebe5d0', au:'#efe9d6', al:'#efe9d6', fc:'#efe9d6'}); return SKELC[k]; }
 const RAGEC = {};
 function rageC(k){ if (!RAGEC[k]) RAGEC[k] = Object.assign({}, CH[k], {hair:'#ff2a1a', hi:'#ffb36a'}); return RAGEC[k]; }
 const WETC = {};
@@ -1362,7 +1394,7 @@ function ik(ax, ay, bx, by, l1, l2, sg){
 }
 
 function drawChar(g, k, p, t){
-  const c = p.rage ? rageC(k) : p.wet ? wetC(k) : CH[k], WH = !!p.flash, LD = k === 2 || k === 7;
+  const c = p.skel ? skelC(k) : p.rage ? rageC(k) : p.wet ? wetC(k) : CH[k], WH = !!p.flash, LD = k === 2 || k === 7;
   const K = col => WH ? '#ffffff' : col, OL = WH ? '#ffffff' : '#18122b';
   const sw = p.mv ? Math.sin(t/85) : 0;
   const bob = (p.a || p.air) ? 0 : Math.sin(t/280) * 1.4;
@@ -1381,6 +1413,11 @@ function drawChar(g, k, p, t){
   else if (p.air){ hF = [27,-44]; hB = [12,-31]; }
   else { hF = [19 - sw*5, -37 + bob]; hB = [8 + sw*5, -25 + bob]; }
 
+  if (p.dance){                                                          /* dancing: hands up and swaying, feet hopping */
+    const w = Math.sin(t/150);
+    fF = [11 + w*14, 52 - Math.max(0, -w)*10]; fB = [-11 - w*14, 52 - Math.max(0, w)*10];
+    hF = [20 + w*8, -60 + Math.abs(Math.cos(t/150))*12]; hB = [-8 - w*8, -56 + Math.abs(Math.sin(t/150))*12]; lean = w*5;
+  }
   const ls = lean*.6, S = [ls, -28 + bob], H = [-lean*.3, 15 + bob*.5];
   const hx = lean*.9 + 1, hy = -52 + bob;
 
@@ -1526,6 +1563,12 @@ function drawChar(g, k, p, t){
     poly([[H[0]-2,6],[H[0]+4,6],[H[0]+7,10],[H[0]+4,14],[H[0]-2,14],[H[0]-5,10]], '#9b8b78', 1.8);
   }
 
+  if (p.skel){                                                           /* bare ribs and spine */
+    g.fillStyle = K('#2a2438'); g.beginPath(); g.ellipse(ls + .5, -16 + bob, 8.5, 13, 0, 0, 7); g.fill();
+    g.strokeStyle = K('#f6f1e0'); g.lineWidth = 2.6;
+    for (let n = 0; n < 4; n++){ const y = -26 + n*7 + bob; g.beginPath(); g.moveTo(ls - 8, y + 2); g.quadraticCurveTo(ls, y - 2, ls + 8, y + 2); g.stroke(); }
+    g.beginPath(); g.moveTo(ls, -30 + bob); g.lineTo(H[0], 12); g.stroke();
+  }
   /* neck, head */
   g.fillStyle = K(dk(c.skin, .88)); g.fillRect(hx - 4, -41 + bob, 7, 10);
   g.save(); g.translate(hx, hy);
@@ -1608,6 +1651,11 @@ function drawChar(g, k, p, t){
   } else {
     g.strokeStyle = LD ? K('#e0566b') : OL; g.lineWidth = LD ? 2.2 : 1.8;
     g.beginPath(); g.arc(8.5, 5, 3, .2, Math.PI - .5); g.stroke();
+  }
+  if (p.skel){                                                           /* skull: hollow eye, teeth */
+    g.fillStyle = '#18122b'; g.beginPath(); g.ellipse(ex + .5, ey, 4.6, 5.4, 0, 0, 7); g.fill();
+    g.fillStyle = '#f6f1e0'; g.fillRect(3, 4, 11, 6); g.strokeStyle = OL; g.lineWidth = 1.4; g.strokeRect(3, 4, 11, 6);
+    g.beginPath(); for (let n = 1; n < 4; n++){ g.moveTo(3 + n*2.75, 4); g.lineTo(3 + n*2.75, 10); } g.moveTo(3, 7); g.lineTo(14, 7); g.stroke();
   }
   g.restore();
 
@@ -1859,7 +1907,7 @@ function drawFighter(i, now){
     ctx.shadowColor = '#ff2a1a'; ctx.shadowBlur = 22 + 6*Math.sin(now/90);
   }
   figure(px + (s.sh ? (Math.random() - .5)*5 : 0), gy - d.y - 52*sc, fighters[i], sd,
-    {a:s.a, air:d.y > 6, mv:moving, s:s.s, tilt:Math.max(0, (tiltT[i] - now)/450), wet:s.wt, wing:s.wg, rage:s.rg, flash:s.s && !hung && Math.floor(now/70)%2 === 0}, now, sc);
+    {a:s.a, air:d.y > 6, mv:moving, s:s.s, tilt:Math.max(0, (tiltT[i] - now)/450), wet:s.wt, wing:s.wg, rage:s.rg, dance:s.dn, skel:s.sk, flash:s.s && !hung && Math.floor(now/70)%2 === 0}, now, sc);
   if (s.rg) ctx.restore();
   if (s.sh){                                              /* electrocuted: sparks crawl over the body */
     ctx.save(); ctx.strokeStyle = '#fff27a'; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.shadowColor = '#ffe14d'; ctx.shadowBlur = 10;
@@ -2251,6 +2299,27 @@ function drawEnt(e, d, t){
         const cy = ey - 24 + k*14;
         ctx.strokeStyle = '#18122b'; ctx.lineWidth = 7; ctx.beginPath(); ctx.ellipse(x, cy, 20*s, 6*s, 0, 0, Math.PI); ctx.stroke();
         ctx.strokeStyle = '#d9b46a'; ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(x, cy, 20*s, 6*s, 0, 0, Math.PI); ctx.stroke();
+      }
+      break; }
+    case 'sdance': {
+      const df = D.f[e.o], fs = V.f[e.o], sc = ps(df.z)*(fs.gs || 1), fdr = fs.fd || 1;
+      if (e.m === 'fire'){                                    /* she blows a long stream of fire onto him */
+        const sx = X(df.x) + fdr*10.5*sc, sy = ZF + df.z - df.y - 96*sc, ex = X(e.tx), ey = ZF + e.tz - e.ty - 58*ps(e.tz);
+        const fa = e.a - DANCE_MS, grow = Math.min(1, fa/220), fade = fa > BLOW_MS - 300 ? Math.max(0, (BLOW_MS - fa)/300) : 1;
+        const dx = ex - sx, dy = ey - sy, L = Math.hypot(dx, dy) || 1;
+        ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 16;
+        for (let n = 30; n >= 0; n--){
+          const f = n/30, wob = Math.sin(t/55 + n*1.7)*5*f, px = sx + dx*grow*f - dy/L*wob, py = sy + dy*grow*f + dx/L*wob, r = (5 + 16*f)*sc;
+          ctx.globalAlpha = (.95 - f*.4)*fade; ctx.fillStyle = f < .25 ? '#fff3a0' : f < .6 ? '#ffb347' : '#ff6a3d'; disc(px, py, r);
+          ctx.globalAlpha = (.8 - f*.4)*fade; ctx.fillStyle = '#ffe38a'; disc(px, py, r*.5);
+        }
+      } else {                                                /* music notes while they dance */
+        const mx = (X(df.x) + X(e.tx))/2, base = ZF + df.z - 125*sc;
+        ctx.font = FONT(24); ctx.textAlign = 'center';
+        for (let n = 0; n < 4; n++){
+          const ph = (t/900 + n*.25) % 1;
+          ctx.globalAlpha = 1 - ph; ctx.fillStyle = FLC[n]; ctx.fillText(n % 2 ? '♪' : '♫', mx + (n - 1.5)*26 + Math.sin(t/200 + n)*6, base - ph*40);
+        }
       }
       break; }
     case 'stick': {
@@ -2853,7 +2922,7 @@ function draw(){
   const items = D.f.map((d, i) => ({z:d.z, f:i}));
   for (const e of V.e){
     const d = D.e[e.id];
-    items.push({z: (e.k === 'lava' || e.k === 'fcrack') ? -999 : (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo' || e.k === 'mermaid' || e.k === 'hornet' || e.k === 'grope' || e.k === 'cfire' || e.k === 'rlaser') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
+    items.push({z: (e.k === 'lava' || e.k === 'fcrack') ? -999 : (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo' || e.k === 'mermaid' || e.k === 'hornet' || e.k === 'grope' || e.k === 'cfire' || e.k === 'rlaser' || e.k === 'sdance') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
   }
   for (const p of V.p || []){ const d = D.p[p.id]; items.push({z: p.h >= 0 ? D.f[p.h].z + .2 : d.z - .05, p}); }
   items.sort((p, q) => p.z - q.z);
@@ -2885,7 +2954,7 @@ function draw(){
   const uOk = lv && !m.u && m.ch >= 100;
   $('bu').style.setProperty('--p', (m.u ? 0 : m.ch) + '%');
   $('bu').classList.toggle('ready', uOk); $('bu').classList.toggle('off', !uOk && !(lv && !m.u));
-  $('bu').firstChild.textContent = fighters[me] === 7 ? (m.nx ? 'Petal Storm' : 'Hornet Rain') : fighters[me] === 10 ? (m.nx ? 'Feathers' : 'Dove') : 'Ultimate';
+  $('bu').firstChild.textContent = fighters[me] === 7 ? (m.nx ? 'Petal Storm' : 'Hornet Rain') : fighters[me] === 10 ? (m.nx ? 'Feathers' : 'Dove') : fighters[me] === 4 ? (m.nx ? 'Dance' : 'Ultimate') : 'Ultimate';
   $('bgb').firstChild.textContent = m.hd ? 'Throw' : 'Grab'; $('bgb').classList.toggle('ready', lv && !!m.hd);
   $('bfly').style.display = fighters[me] === 5 ? 'flex' : 'none';
   $('bfly').firstChild.textContent = m.fy ? 'Land' : 'Fly';
