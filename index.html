@@ -547,6 +547,10 @@ function loop(){
     if (e.k === 'ccart') continue;
     if (e.k === 'cfire'){ cfireTick(e, dt, now); continue; }
     if (e.k === 'grope'){ gropeTick(e, dt, now); continue; }
+    if (e.k === 'ecart'){ ecartTick(e, dt, now); continue; }
+    if (e.k === 'ebr'){ ebrTick(e, dt, now); continue; }
+    if (e.k === 'ggiant'){ ggiantTick(e, dt, now); continue; }
+    if (e.k === 'croc'){ crocTick(e, dt, now); continue; }
     if (e.k === 'gdove'){ doveTick(e, dt, now); continue; }
     if (e.k === 'stick'){ stickTick(e, dt); continue; }
     if (e.k === 'sdance'){ sdanceTick(e, dt, now); continue; }
@@ -669,7 +673,7 @@ function doUlt(i){
   const now = performance.now(), f = G.f[i], d = f.fd, tgi = foe(i), o = G.f[tgi];
   if (now < f.stun || now < f.ultAt || f.hold) return;
   f.ultAt = now + 11000; f.ch = 0; f.a = 4; f.aUntil = now + 700;
-  const el = fighters[i], un = (el === 7 || el === 10 || el === 4) ? f.un++ % 2 : 0;       /* the flower fighter alternates: 1st hornet, 2nd petal storm */
+  const el = fighters[i], un = (el === 7 || el === 10 || el === 4 || el === 8 || el === 9) ? f.un++ % 2 : 0;       /* the flower fighter alternates: 1st hornet, 2nd petal storm */
   ev({k:'ult', i, u:un});
   if (el === 0){        /* water: flood the arena, unicorn electrocutes the enemy */
     waterUlt(i, now);
@@ -683,8 +687,8 @@ function doUlt(i){
   } else if (el === 5){ bambooUlt(i, now);
   } else if (el === 6){ mermaidUlt(i, now);
   } else if (el === 7){ if (un) petalUlt(i, now); else hornetUlt(i, now);
-  } else if (el === 8){ cowUlt(i, now);
-  } else if (el === 9){ goliathUlt(i, now);
+  } else if (el === 8){ if (un) cartTrioUlt(i, now); else cowUlt(i, now);
+  } else if (el === 9){ if (un) giantGripUlt(i, now); else goliathUlt(i, now);
   } else if (el === 10){ if (un) featherUlt(i, now); else doveUlt(i, now);
   } else if (el === 11){ rosUlt(i, now);
   } else {              /* soil: trees tie the enemy, rock (N curve), bear, elephant, 1 s wait, trees vanish */
@@ -1116,6 +1120,98 @@ function gropeTick(e, dt, now){
   en.vy = 0; en.kx = 0; en.a = 0; en.flyUntil = 0; en.stun = Math.max(en.stun, now + 150);
   e.x = en.x; e.z = en.z; e.tx = en.x; e.ty = en.y; e.tz = en.z;
 }
+
+/* ---------- Renjana ultimate #2: three cow carts roll in; one breathes fire, one ice, one rocks ---------- */
+const TRI_IN = 900, TRI_CH = 700, TRI_BD = 900, TRI_END = 4700, ICE_MS = 800;       /* ms: roll in, charge, blow length, leave, freeze time */
+const TRI_BL = {fire:1500, ice:2300, rock:3100};                                     /* when each cart starts to blow */
+const triOpen = (m, a) => { const bl = TRI_BL[m]; return a < bl - TRI_CH ? 0 : a < bl ? (a - (bl - TRI_CH))/TRI_CH : a < bl + TRI_BD - 250 ? 1 : Math.max(0, (bl + TRI_BD - a)/250); };
+function cartTrioUlt(i, now){
+  const f = G.f[i], tgi = foe(i), en = G.f[tgi];
+  G.e = G.e.filter(x => !(x.k === 'ccart' && x.o === i));                           /* the fire cow drives away while the three are here */
+  later(now + TRI_END + 200, () => { if (!G.e.some(x => x.k === 'ccart' && x.o === i)) spawnCart(i); });
+  const cx = (f.x + en.x)/2;
+  [['fire', -1, -250], ['ice', 1, 0], ['rock', 1, 250]].forEach(([mode, side, off]) => {
+    const px = clamp(cx + off, 100, WW - 100);
+    const c = {id:++G.eid, k:'ecart', o:i, tg:tgi, mode, x:px + side*640, y:0, z:0, age:0, fd:-side, sx:px + side*640, px, side};
+    G.e.push(c);
+    G.e.push({id:++G.eid, k:'ebr', o:i, tg:tgi, mode, cid:c.id, x:c.x, y:0, z:0, age:0, fd:c.fd, tx:en.x, ty:en.y, tz:en.z});
+  });
+  tx(f, 'Three carts!', '#ffd166');
+}
+function ecartTick(e, dt, now){
+  const f = G.f[e.o], en = G.f[e.tg];
+  if (en.hp <= 0 || f.hp <= 0 || e.age >= TRI_END){ rm(e); return; }
+  const a = e.age;
+  if (a < TRI_IN){ const k = 1 - Math.pow(1 - a/TRI_IN, 3); e.x = e.sx + (e.px - e.sx)*k; e.fd = -e.side; }
+  else if (a < TRI_END - 500){ e.x = e.px; e.fd = Math.sign(en.x - e.x) || e.fd; }
+  else { const k = (a - (TRI_END - 500))/500; e.x = e.px + e.side*k*k*700; e.fd = e.side; }     /* rolls away on its own side */
+}
+function ebrTick(e, dt, now){
+  const cart = G.e.find(x => x.id === e.cid), en = G.f[e.tg];
+  if (!cart || en.hp <= 0 || e.age > TRI_BL[e.mode] + TRI_BD + 400){ rm(e); return; }
+  e.x = cart.x; e.z = cart.z; e.fd = cart.fd; e.tx = en.x; e.ty = en.y; e.tz = en.z;
+  const T = TRI_BL[e.mode] + 200, dir = Math.sign(en.x - cart.x) || cart.fd;
+  if (e.age >= TRI_BL[e.mode] && !e.snd){ e.snd = true; ev({k:'snd', n: e.mode === 'fire' ? 'fire' : 'hit'}); }
+  if (e.hit || e.age < T) return;
+  e.hit = true;
+  if (e.mode === 'fire'){
+    ev({k:'snd', n:'boom'});
+    damage(e.tg, 10, 260, 500, true, 260, dir); tx(en, 'Burned!', '#ff9a4d');
+    en.burn = now + 4000;
+    for (let n = 1; n <= 8; n++) later(now + n*400, () => { if (en.hp > 0 && !en.hid) damage(e.tg, 3, 0, 0, false); });
+  } else if (e.mode === 'ice'){
+    damage(e.tg, 6, 0, 0, false); tx(en, 'Frozen!', '#9fe0ff');
+    if (en.hold) dropHold(e.tg);
+    en.stun = Math.max(en.stun, now + ICE_MS); en.root = Math.max(en.root, now + ICE_MS);
+    en.a = 0; en.flyUntil = 0; en.kx = 0;
+  } else {
+    en.root = 0; ev({k:'snd', n:'boom'});                                           /* the rocks shatter the ice and throw him far */
+    damage(e.tg, 18, 2300, 1200, true, 450, dir); tx(en, 'Thrown!', '#ffd166');
+  }
+}
+
+/* ---------- Miss Goliath ultimate #2: a giant copy of her rises from below (chest to head) and holds the enemy; the real one throws 24 crocodile dolls ---------- */
+const GG_RISE = 750, GG_N = 24, GG_T0 = 1000, GG_DT = 150, GG_FLY = 380, GG_HY = 74, GG_OUT = 500;
+const GG_END = GG_T0 + (GG_N - 1)*GG_DT + GG_FLY + GG_OUT;
+function giantGripUlt(i, now){
+  const f = G.f[i], tgi = foe(i), en = G.f[tgi], d = Math.sign(en.x - f.x) || f.fd;
+  f.fd = d; f.root = Math.max(f.root, now + GG_END - 350);
+  tx(f, 'Big me!', '#ffd23f');
+  const gx = clamp(en.x + d*30, 80, WW - 80);
+  const gg = {id:++G.eid, k:'ggiant', o:i, tg:tgi, x:gx, y:0, z:f.z, age:0, fd:-d, tx:en.x, ty:en.y, tz:en.z};
+  G.e.push(gg);
+  later(now + 100, () => { if (en.hold) dropHold(tgi); });
+  for (let n = 0; n < GG_N; n++) later(now + GG_T0 + n*GG_DT, () => {
+    if (!G.e.includes(gg) || en.hp <= 0 || f.hp <= 0) return;
+    const nw = performance.now();
+    f.a = 3; f.aUntil = nw + 170; ev({k:'snd', n:'hit'});                           /* she throws a doll */
+    G.e.push({id:++G.eid, k:'croc', o:i, tg:tgi, gid:gg.id, n, last:n === GG_N - 1, x:f.x + d*34, y:f.y + 58, z:f.z, age:0, fd:d,
+              sx:f.x + d*34, sy:f.y + 58, sz:f.z, tx:gg.x, ty:GG_HY + 52, tz:f.z});
+  });
+}
+function ggiantTick(e, dt, now){
+  const f = G.f[e.o], en = G.f[e.tg];
+  if (f.hp <= 0 || en.hp <= 0 || e.age >= GG_END){ rm(e); return; }
+  if (e.age >= GG_RISE && !e.rel){                                                   /* the giant hands lift and hold him */
+    const k = clamp(12*dt, 0, 1);
+    en.x += (e.x - en.x)*k; en.z += (f.z - en.z)*k; en.y += (GG_HY + Math.sin(e.age/240)*3 - en.y)*k;
+    en.vy = 0; en.kx = 0; en.a = 0; en.flyUntil = 0; en.stun = Math.max(en.stun, now + 150);
+  }
+  e.z = f.z; e.tx = en.x; e.ty = en.y; e.tz = en.z;
+}
+function crocTick(e, dt, now){
+  const en = G.f[e.tg], gg = G.e.find(x => x.id === e.gid);
+  if (!gg || en.hp <= 0){ rm(e); return; }
+  const p = clamp(e.age/GG_FLY, 0, 1);
+  e.x = e.sx + (e.tx - e.sx)*p; e.z = e.sz + (en.z - e.sz)*p;
+  e.y = e.sy + (e.ty - e.sy)*p + Math.sin(p*Math.PI)*34;
+  if (e.age < GG_FLY) return;
+  rm(e);
+  if (e.last){
+    gg.rel = true;                                                                  /* the 24th doll: the giant lets go and he flies */
+    damage(e.tg, 18, 2300, 1200, true, 450, Math.sign(e.tx - e.sx) || e.fd); tx(en, 'Thrown!', '#ffd166');
+  } else damage(e.tg, 1.4, 0, 0, false);
+}
 /* ---------- Merpati: stick rain (special), giant dove (ultimate 1), wings + feathers (ultimate 2) ---------- */
 function stickRain(i){
   if (!G || G.over) return;
@@ -1264,7 +1360,7 @@ function handleEv(m){
   } else if (m.k === 'beast'){
     banner = {s:'A wild ' + BEASTS[m.n] + '!', c:'#ff8a8a', t0:now, dur:1800};
   } else if (m.k === 'ult'){
-    banner = {s:(fighters[m.i] === 7 && m.u) ? 'Petal Storm' : (fighters[m.i] === 10 && m.u) ? 'Feather Storm' : (fighters[m.i] === 4 && m.u) ? 'Skeleton Dance' : ULTN[fighters[m.i]], c:F[fighters[m.i]].c, t0:now};
+    banner = {s:(fighters[m.i] === 7 && m.u) ? 'Petal Storm' : (fighters[m.i] === 10 && m.u) ? 'Feather Storm' : (fighters[m.i] === 4 && m.u) ? 'Skeleton Dance' : (fighters[m.i] === 8 && m.u) ? 'Elemental Carts' : (fighters[m.i] === 9 && m.u) ? 'Crocodile Storm' : ULTN[fighters[m.i]], c:F[fighters[m.i]].c, t0:now};
   }
 }
 function onRound(w){
@@ -1896,7 +1992,9 @@ function drawFighter(i, now){
   ctx.fillStyle = '#00000066'; ctx.beginPath(); ctx.ellipse(px, gy + 3, Math.max(6, 34 - d.y*.12)*sc, 7*sc, 0, 0, 7); ctx.fill();
   const sd = (1 ? s.fd : -s.fd) || 1;             /* facing, as seen on this phone */
   const moving = Math.abs(d.x - d.lx) > .4 || Math.abs(d.z - d.lz) > .3;
-  const hung = V.e.some(q => q.k === 'grope' && q.g === i);
+  const iceOn = V.e.some(q => q.k === 'ebr' && q.m === 'ice' && q.g === i && q.a >= TRI_BL.ice + 200 && q.a < TRI_BL.ice + 200 + ICE_MS);
+  const heldG = V.e.some(q => q.k === 'ggiant' && q.g === i && q.a >= GG_RISE - 100 && q.a < GG_END - GG_OUT + 60);
+  const hung = iceOn || heldG || V.e.some(q => q.k === 'grope' && q.g === i);
   const sunk = d.y < -1;                                   /* sinking into lava: only the part above the floor shows */
   if (sunk){ ctx.save(); ctx.beginPath(); ctx.rect(-60, 0, 840, gy + 2); ctx.clip(); }
   if (s.rg){                                              /* Kak Ros: body glows red */
@@ -1909,6 +2007,18 @@ function drawFighter(i, now){
   figure(px + (s.sh ? (Math.random() - .5)*5 : 0), gy - d.y - 52*sc, fighters[i], sd,
     {a:s.a, air:d.y > 6, mv:moving, s:s.s, tilt:Math.max(0, (tiltT[i] - now)/450), wet:s.wt, wing:s.wg, rage:s.rg, dance:s.dn, skel:s.sk, flash:s.s && !hung && Math.floor(now/70)%2 === 0}, now, sc);
   if (s.rg) ctx.restore();
+  if (heldG){                                             /* the giant's hand comes up from below the screen and grips him */
+    const fy = gy - d.y - 52*sc, hy = fy + 20*sc, SK = '#f3c9a3', open = Math.min(1, V.e.find(q => q.k === 'ggiant' && q.g === i).a/GG_RISE);
+    ctx.save(); ctx.lineCap = 'round';
+    for (const sx of [-13, 13]){
+      ctx.strokeStyle = OLN; ctx.lineWidth = 19*sc + 5; line(px + sx*sc, hy + 6*sc, px + sx*sc*1.5, 380);
+      ctx.strokeStyle = SK; ctx.lineWidth = 19*sc; line(px + sx*sc, hy + 6*sc, px + sx*sc*1.5, 380);
+    }
+    pEll(ctx, px, hy + 6*sc, 24*sc, 14*sc, SK, 2.4);
+    for (let n = 0; n < 4; n++) pEll(ctx, px + (n - 1.5)*10.5*sc, hy - 4*sc - Math.sin(now/260 + n)*sc, 5.2*sc, 8.5*sc, SK, 2);
+    pEll(ctx, px - 22*sc, hy - 2*sc, 5*sc, 9*sc, SK, 2, .5); pEll(ctx, px + 22*sc, hy - 2*sc, 5*sc, 9*sc, SK, 2, -.5);
+    ctx.restore();
+  }
   if (s.sh){                                              /* electrocuted: sparks crawl over the body */
     ctx.save(); ctx.strokeStyle = '#fff27a'; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.shadowColor = '#ffe14d'; ctx.shadowBlur = 10;
     for (let z = 0; z < 5; z++){
@@ -2289,6 +2399,81 @@ function drawEnt(e, d, t){
         ctx.shadowBlur = 0; ctx.globalAlpha = fade; ctx.fillStyle = '#ffd166'; disc(ex, ey, (12 + Math.sin(t/45)*4)*grow);
       }
       break; }
+    case 'ecart': {                                       /* Renjana's three elemental cow carts */
+      const open = triOpen(e.m, e.a), mv = e.a < TRI_IN || e.a > TRI_END - 500;
+      const col = e.m === 'fire' ? '#ff6a3d' : e.m === 'ice' ? '#7fd3ff' : '#a39a8c';
+      ctx.fillStyle = '#00000055'; ctx.beginPath(); ctx.ellipse(x, gy + 3, 92*s*CART_K*1.1, 8*s, 0, 0, 7); ctx.fill();
+      ctx.translate(x, gy + (mv ? Math.sin(t/45)*1.5 : 0)); ctx.scale(ds*CART_K*s, CART_K*s); ctx.translate(-10 + (open > 0 && open < 1 ? Math.sin(t/28)*1.3 : 0), 0);
+      drawCowCart(ctx, t, open);
+      ctx.shadowColor = col; ctx.shadowBlur = 12; pEll(ctx, -51, -122, 12, 12, col, 2.4); ctx.shadowBlur = 0;    /* the element sign on the roof */
+      ctx.font = FONT(17); ctx.textAlign = 'center'; ctx.scale(ds, 1);
+      ctx.fillText(e.m === 'fire' ? '🔥' : e.m === 'ice' ? '❄️' : '🪨', -51*ds, -116);
+      break; }
+    case 'ebr': {                                         /* what the carts breathe: fire, ice, rocks (and the ice block on the enemy) */
+      const bd = ds || 1, K = CART_K*s, bl = TRI_BL[e.m], open = triOpen(e.m, e.a);
+      const mm = cowMouth(open), sx = x + bd*(mm[0] - 10)*K, sy = gy + mm[1]*K;
+      const ex = X(e.tx), ey = ZF + e.tz - e.ty - 58*ps(e.tz), ps0 = ps(e.tz);
+      const C = e.m === 'fire' ? ['#fff3a0', '#ffb347', '#ff6a3d', '#ff6a3d'] : e.m === 'ice' ? ['#ffffff', '#c9f0ff', '#6cc6ff', '#9fe0ff'] : ['#d8d0c4', '#a39a8c', '#7d7468', '#a39a8c'];
+      if (e.a >= bl - TRI_CH && e.a < bl){                                   /* charging in the mouth */
+        const k = (e.a - (bl - TRI_CH))/TRI_CH, r = (5 + 18*k)*s*(1 + .15*Math.sin(t/40));
+        ctx.shadowColor = C[3]; ctx.shadowBlur = 18; ctx.fillStyle = C[2]; disc(sx, sy, r);
+        ctx.shadowBlur = 0; ctx.fillStyle = C[0]; disc(sx, sy, r*.55);
+        ctx.fillStyle = C[1];
+        for (let n = 0; n < 6; n++){ const ph = (t/260 + n*.17) % 1, an = n*1.05 + e.id; disc(sx + Math.cos(an)*(44 - 38*ph), sy + Math.sin(an)*(44 - 38*ph), 2.4*(1 - ph) + .6); }
+      } else if (e.a >= bl && e.a < bl + TRI_BD){                            /* the stream flows to the enemy */
+        const dx = ex - sx, dy = ey - sy, D0 = Math.hypot(dx, dy) || 1, ux = dx/D0, uy = dy/D0, a2 = e.a - bl;
+        const grow = Math.min(1, a2/200), fade = a2 > TRI_BD - 300 ? Math.max(0, (TRI_BD - a2)/300) : 1, len = D0*grow;
+        if (e.m === 'rock'){
+          ctx.shadowBlur = 0;
+          for (let n = 0; n < 16; n++){                                       /* chunks of rock fly along the line */
+            const ph = (t/330 + n/16) % 1, f = ph*grow, px2 = sx + ux*len*f - uy*Math.sin(n*2.3 + t/90)*7*f, py2 = sy + uy*len*f + ux*Math.sin(n*2.3 + t/90)*7*f, r = (4 + 8*f)*s;
+            ctx.save(); ctx.translate(px2, py2); ctx.rotate(t/110 + n*1.3); ctx.globalAlpha = fade;
+            ctx.beginPath(); for (let q = 0; q < 6; q++){ const an = q*1.047, rr = r*(.75 + ((n*7 + q*3) % 5)*.1); q ? ctx.lineTo(Math.cos(an)*rr, Math.sin(an)*rr) : ctx.moveTo(Math.cos(an)*rr, Math.sin(an)*rr); }
+            ctx.closePath(); ctx.fillStyle = n % 3 ? C[1] : C[2]; ctx.fill(); ctx.strokeStyle = OLN; ctx.lineWidth = 2; ctx.stroke();
+            ctx.fillStyle = '#ffffff44'; disc(-r*.25, -r*.25, r*.28); ctx.restore();
+          }
+          ctx.globalAlpha = .35*fade; ctx.fillStyle = '#cfc6b8';
+          for (let n = 0; n < 6; n++) disc(ex + Math.sin(t/90 + n*2)*18*ps0, ey + 20*ps0 - ((t/6 + n*30) % 70), (8 + n % 3*3)*grow);
+        } else {
+          ctx.shadowColor = C[3]; ctx.shadowBlur = 16;
+          for (let n = 30; n >= 0; n--){
+            const f = n/30, wob = Math.sin(t/55 + n*1.7)*(e.m === 'ice' ? 4 : 6)*f, px2 = sx + ux*len*f - uy*wob, py2 = sy + uy*len*f + ux*wob, r = (6 + 22*f)*s;
+            ctx.globalAlpha = (.95 - f*.4)*fade; ctx.fillStyle = f < .25 ? C[0] : f < .6 ? C[1] : C[2]; disc(px2, py2, r);
+            ctx.globalAlpha = (.8 - f*.4)*fade; ctx.fillStyle = C[0]; disc(px2, py2, r*.5);
+          }
+          if (e.m === 'ice'){                                                 /* snow stars in the icy breath */
+            ctx.shadowBlur = 0; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.globalAlpha = fade;
+            for (let n = 0; n < 9; n++){ const f = ((t/420 + n/9) % 1)*grow, px2 = sx + ux*D0*f - uy*Math.sin(n*3 + t/80)*9, py2 = sy + uy*D0*f + ux*Math.sin(n*3 + t/80)*9;
+              line(px2 - 5, py2, px2 + 5, py2); line(px2, py2 - 5, px2, py2 + 5); line(px2 - 3.5, py2 - 3.5, px2 + 3.5, py2 + 3.5); line(px2 - 3.5, py2 + 3.5, px2 + 3.5, py2 - 3.5); }
+          }
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = fade; ctx.fillStyle = C[0]; disc(ex, ey, (10 + Math.sin(t/45)*3)*grow);
+      }
+      if (e.m === 'ice'){                                                     /* he is frozen in a block, then the rocks shatter it */
+        const i0 = bl + 200, i1 = i0 + ICE_MS;
+        if (e.a >= i0 && e.a < i1){
+          const gk = Math.min(1, (e.a - i0)/160), w = 30*ps0*gk, h = 70*ps0*gk;
+          ctx.globalAlpha = .62; ctx.fillStyle = '#b9ecff'; ctx.strokeStyle = '#effcff'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(ex - w, ey - h*.85); ctx.lineTo(ex - w*.45, ey - h); ctx.lineTo(ex + w*.55, ey - h*.95); ctx.lineTo(ex + w, ey - h*.7);
+          ctx.lineTo(ex + w*.95, ey + h*.8); ctx.lineTo(ex + w*.3, ey + h); ctx.lineTo(ex - w*.7, ey + h*.95); ctx.lineTo(ex - w, ey + h*.7); ctx.closePath(); ctx.fill(); ctx.globalAlpha = .9; ctx.stroke();
+          ctx.globalAlpha = .55; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; line(ex - w*.5, ey - h*.6, ex - w*.1, ey - h*.1); line(ex + w*.35, ey - h*.5, ex + w*.6, ey + h*.2);
+        } else if (e.a >= i1 && e.a < i1 + 360){                              /* shards fly */
+          const k = (e.a - i1)/360; ctx.globalAlpha = 1 - k; ctx.fillStyle = '#d6f4ff'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+          for (let n = 0; n < 12; n++){ const an = n*.5236 + .3, dist = k*(40 + (n % 3)*26)*ps0, sx2 = ex + Math.cos(an)*dist, sy2 = ey + Math.sin(an)*dist*.9 + k*k*40;
+            ctx.save(); ctx.translate(sx2, sy2); ctx.rotate(k*6 + n); ctx.beginPath(); ctx.moveTo(0, -8*ps0); ctx.lineTo(5*ps0, 6*ps0); ctx.lineTo(-5*ps0, 6*ps0); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); }
+        }
+      }
+      break; }
+    case 'ggiant': {                                      /* a giant Miss Goliath rises from below: only chest and head show */
+      const rise = Math.min(1, e.a/GG_RISE), out = e.a > GG_END - GG_OUT ? Math.min(1, (e.a - (GG_END - GG_OUT))/GG_OUT) : 0;
+      const k = rise*(2 - rise)*(1 - out*out), cy = 330 + (1 - k)*340, GS = 3.3;
+      ctx.globalAlpha = .97;
+      const shk = rise < 1 || out > 0 ? Math.sin(t/38)*2.2 : 0;
+      figure(x + shk, cy, 9, ds || 1, {a: e.a >= GG_RISE && out === 0 ? 4 : 0, air:false, mv:false}, t, GS);
+      break; }
+    case 'croc': {                                        /* a spinning crocodile doll */
+      for (let k = 3; k >= 1; k--){ ctx.globalAlpha = .34 - k*.07; ctx.fillStyle = '#8be36a'; disc(x - ds*k*15, y + Math.sin(t/70 + k)*3, (7 - k)*s); }
+      ctx.globalAlpha = 1; ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(t/80*ds + e.id); drawCrocDoll(ctx, 15, t); break; }
     case 'grope': {                                       /* the rope that hangs the enemy; coils wrap his body */
       const ey = ZF + (d.z || 0) - e.ty - 58*s, fall = Math.min(1, e.a/220), topY = -20, endY = topY + (ey - 16 - topY)*fall;
       ctx.lineCap = 'round';
@@ -2465,6 +2650,20 @@ const PD = {
 const CART_K = .72;                                         /* cow cart size next to the fighters */
 const cowMouth = open => { const a = -open*.3, dx = 40, dy = 7;      /* where the fire leaves the cow (local, facing right) */
   return [74 + dx*Math.cos(a) - dy*Math.sin(a), -56 + dx*Math.sin(a) + dy*Math.cos(a)]; };
+function drawCrocDoll(g, R, t){
+  const k = R/16, G1 = '#6cc04a', G2 = '#4f9d36', BL = '#e6f5b8';
+  g.fillStyle = '#3e8a2e'; g.strokeStyle = OLN; g.lineWidth = 1.4;
+  for (let n = 0; n < 4; n++){ g.beginPath(); g.moveTo((-8 + n*6)*k, -7*k); g.lineTo((-5 + n*6)*k, -12*k); g.lineTo((-2 + n*6)*k, -7*k); g.closePath(); g.fill(); g.stroke(); }
+  pEll(g, -21*k, 1*k, 9*k, 3.6*k, G2, 1.6, .25);
+  pEll(g, -7*k, 8*k, 3.6*k, 3.6*k, G2, 1.5); pEll(g, 7*k, 8*k, 3.6*k, 3.6*k, G2, 1.5);
+  pEll(g, 0, 0, 15*k, 8.5*k, G1, 1.9);
+  pEll(g, 0, 3.4*k, 11*k, 4*k, BL, 0);
+  pEll(g, 16*k, -1*k, 11*k, 6*k, G1, 1.8);
+  g.fillStyle = '#ffffff'; g.strokeStyle = OLN; g.lineWidth = 1;
+  for (let n = 0; n < 3; n++){ g.beginPath(); g.moveTo((19 + n*3.2)*k, 3.4*k); g.lineTo((20.6 + n*3.2)*k, 7*k); g.lineTo((22.2 + n*3.2)*k, 3.4*k); g.closePath(); g.fill(); g.stroke(); }
+  pEll(g, 12*k, -7*k, 3.6*k, 3.6*k, '#ffffff', 1.4); g.fillStyle = OLN; g.beginPath(); g.arc(13*k, -7*k, 1.5*k, 0, 7); g.fill();
+  g.beginPath(); g.arc(24.5*k, -2.5*k, 1*k, 0, 7); g.fill();
+}
 function drawBunnyDoll(g, R, t){
   const k = R/16, W = '#fff4f8', P = '#ff9ac4';
   pEll(g, -5.5*k, -18*k, 3.8*k, 10*k, W, 1.7, -.22); pEll(g, 5.5*k, -18*k, 3.8*k, 10*k, W, 1.7, .22);
@@ -2918,11 +3117,11 @@ function draw(){
   drawArena(now);
 
   /* everything standing on the floor is drawn far-to-near so closer fighters cover farther ones */
-  const isBack = e => e.k === 'fplant' || e.k === 'tank' || e.k === 'tree' || e.k === 'uni' || e.k === 'icem' || e.k === 'ccart' || (e.k === 'panda' && e.m !== 'atk');
+  const isBack = e => e.k === 'fplant' || e.k === 'tank' || e.k === 'tree' || e.k === 'uni' || e.k === 'icem' || e.k === 'ccart' || e.k === 'ecart' || (e.k === 'panda' && e.m !== 'atk');
   const items = D.f.map((d, i) => ({z:d.z, f:i}));
   for (const e of V.e){
     const d = D.e[e.id];
-    items.push({z: (e.k === 'lava' || e.k === 'fcrack') ? -999 : (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo' || e.k === 'mermaid' || e.k === 'hornet' || e.k === 'grope' || e.k === 'cfire' || e.k === 'rlaser' || e.k === 'sdance') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
+    items.push({z: (e.k === 'lava' || e.k === 'fcrack' || e.k === 'ggiant') ? -999 : (e.k === 'flood' || e.k === 'bolt' || e.k === 'bamboo' || e.k === 'mermaid' || e.k === 'hornet' || e.k === 'grope' || e.k === 'cfire' || e.k === 'ebr' || e.k === 'rlaser' || e.k === 'sdance') ? 999 : (d.z || 0) + (isBack(e) ? -.1 : .1), e});
   }
   for (const p of V.p || []){ const d = D.p[p.id]; items.push({z: p.h >= 0 ? D.f[p.h].z + .2 : d.z - .05, p}); }
   items.sort((p, q) => p.z - q.z);
@@ -2954,7 +3153,7 @@ function draw(){
   const uOk = lv && !m.u && m.ch >= 100;
   $('bu').style.setProperty('--p', (m.u ? 0 : m.ch) + '%');
   $('bu').classList.toggle('ready', uOk); $('bu').classList.toggle('off', !uOk && !(lv && !m.u));
-  $('bu').firstChild.textContent = fighters[me] === 7 ? (m.nx ? 'Petal Storm' : 'Hornet Rain') : fighters[me] === 10 ? (m.nx ? 'Feathers' : 'Dove') : fighters[me] === 4 ? (m.nx ? 'Dance' : 'Ultimate') : 'Ultimate';
+  $('bu').firstChild.textContent = fighters[me] === 7 ? (m.nx ? 'Petal Storm' : 'Hornet Rain') : fighters[me] === 10 ? (m.nx ? 'Feathers' : 'Dove') : fighters[me] === 4 ? (m.nx ? 'Dance' : 'Ultimate') : fighters[me] === 8 ? (m.nx ? 'Cart Trio' : 'Fire Cow') : fighters[me] === 9 ? (m.nx ? 'Giant Grip' : 'Giant Rope') : 'Ultimate';
   $('bgb').firstChild.textContent = m.hd ? 'Throw' : 'Grab'; $('bgb').classList.toggle('ready', lv && !!m.hd);
   $('bfly').style.display = fighters[me] === 5 ? 'flex' : 'none';
   $('bfly').firstChild.textContent = m.fy ? 'Land' : 'Fly';
